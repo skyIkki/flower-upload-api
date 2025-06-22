@@ -24,20 +24,27 @@ jobs:
       - name: 🧠 Run training script
         run: python auto_retrain.py
 
+      - name: 📥 Download latest model_version.txt from Firebase
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
+        run: |
+          curl -X GET -L \
+            -H "Authorization: Bearer $FIREBASE_TOKEN" \
+            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o/model_version.txt?alt=media" \
+            -o model_version.txt || echo "v0" > model_version.txt
+
       - name: 📄 Auto-increment model_version.txt
         run: |
           VERSION_FILE="model_version.txt"
 
-          if [[ -f "$VERSION_FILE" ]]; then
-            OLD_VERSION=$(cat "$VERSION_FILE")
-            OLD_NUMBER=${OLD_VERSION//[!0-9]/}
-            NEW_NUMBER=$((OLD_NUMBER + 1))
-            echo "v$NEW_NUMBER" > "$VERSION_FILE"
-          else
-            echo "v1" > "$VERSION_FILE"
-          fi
+          OLD_VERSION=$(cat "$VERSION_FILE")
+          OLD_NUMBER=${OLD_VERSION//[!0-9]/}
+          NEW_NUMBER=$((OLD_NUMBER + 1))
+          echo "v$NEW_NUMBER" > "$VERSION_FILE"
 
           echo "✅ New model version: $(cat $VERSION_FILE)"
+
 
       - name: 📤 Upload model and version to Firebase Storage
         env:
