@@ -16,7 +16,7 @@ import requests
 # SETUP
 # ---------------------------
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_OUTPUT = "best_flower_model.pt"
+MODEL_OUTPUT = "best_flower_model_v3.pt"
 DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data"
 BASE_DIR = "flowers"
 TRAIN_DIR = os.path.join(BASE_DIR, "train")
