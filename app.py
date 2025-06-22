@@ -37,6 +37,9 @@ def list_images():
 
     html = """
     <h2>🌼 Uploaded Flower Images</h2>
+    <form method="POST" action="/clear">
+        <button type="submit" style="margin-bottom: 20px;">🗑️ Clear All Images</button>
+    </form>
     {% for label, images in image_data.items() %}
         <h3>{{ label }}</h3>
         {% for img in images %}
@@ -48,6 +51,7 @@ def list_images():
     {% endfor %}
     """
     return render_template_string(html, image_data=image_data)
+
 
 @app.route('/image/<label>/<filename>')
 def serve_image(label, filename):
