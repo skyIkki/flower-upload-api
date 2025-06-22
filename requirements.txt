@@ -1,6 +1,6 @@
 Flask==2.3.3
 gunicorn
-torch==2.2.0
+torch==2.5.1
 torchvision==0.17.0
 Pillow
 numpy<2
