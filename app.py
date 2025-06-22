@@ -1,5 +1,7 @@
-from flask import Flask, request, send_from_directory, render_template_string
+from flask import Flask, request, send_from_directory, render_template_string, send_file
 import os
+import io
+import zipfile
 from datetime import datetime
 
 app = Flask(__name__)
@@ -52,11 +54,10 @@ def list_images():
     """
     return render_template_string(html, image_data=image_data)
 
-
 @app.route('/image/<label>/<filename>')
 def serve_image(label, filename):
     return send_from_directory(os.path.join("training_data", label), filename)
-    
+
 @app.route('/download-data')
 def download_data():
     data_dir = 'training_data'
@@ -72,6 +73,6 @@ def download_data():
                 zf.write(full_path, arcname=rel_path)
     memory_file.seek(0)
     return send_file(memory_file, download_name="training_data.zip", as_attachment=True)
-    
+
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
