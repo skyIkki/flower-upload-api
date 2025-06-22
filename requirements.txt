@@ -1,2 +1,9 @@
 Flask==2.3.3
 gunicorn
+
+# PyTorch & TorchVision (recommended stable versions)
+torch==2.2.0
+torchvision==0.17.0
+
+# Optional: If your retraining uses PIL or other image tools
+Pillow
