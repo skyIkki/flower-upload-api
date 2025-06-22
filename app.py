@@ -56,6 +56,22 @@ def list_images():
 @app.route('/image/<label>/<filename>')
 def serve_image(label, filename):
     return send_from_directory(os.path.join("training_data", label), filename)
+    
+@app.route('/download-data')
+def download_data():
+    data_dir = 'training_data'
+    if not os.path.exists(data_dir):
+        return "No training data available.", 404
 
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(data_dir):
+            for file in files:
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, data_dir)
+                zf.write(full_path, arcname=rel_path)
+    memory_file.seek(0)
+    return send_file(memory_file, download_name="training_data.zip", as_attachment=True)
+    
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
