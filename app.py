@@ -26,6 +26,9 @@ def list_images():
     root_dir = "training_data"
     image_data = {}
 
+    if not os.path.exists(root_dir):
+        return "<h2>❗No uploaded images yet.</h2>"
+
     for label in os.listdir(root_dir):
         label_dir = os.path.join(root_dir, label)
         if os.path.isdir(label_dir):
