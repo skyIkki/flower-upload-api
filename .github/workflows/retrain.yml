@@ -39,17 +39,16 @@ jobs:
 
           echo "✅ New model version: $(cat $VERSION_FILE)"
 
-      - name: 📤 Upload model and version to Firebase Storage
+      - name: 📁 Prepare files for Firebase Storage
+        run: |
+          mkdir -p storage
+          cp best_flower_model_v3.pt storage/
+          cp model_version.txt storage/
+
+      - name: 📤 Deploy to Firebase Storage
+        uses: w9jds/firebase-action@v13.2.0
+        with:
+          args: deploy --only storage
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: |
-          # Upload the PyTorch model
-          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-            -F "file=@best_flower_model_v3.pt" \
-            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_PROJECT_ID}.appspot.com/o?name=best_flower_model_v3.pt"
-
-          # Upload the updated version file
-          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-            -F "file=@model_version.txt" \
-            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_PROJECT_ID}.appspot.com/o?name=model_version.txt"
+          PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
