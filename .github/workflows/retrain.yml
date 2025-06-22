@@ -39,16 +39,19 @@ jobs:
 
           echo "✅ New model version: $(cat $VERSION_FILE)"
 
-      - name: 📁 Prepare files for Firebase Storage
-        run: |
-          mkdir -p storage
-          cp best_flower_model_v3.pt storage/
-          cp model_version.txt storage/
-
-      - name: 📤 Deploy to Firebase Storage
-        uses: w9jds/firebase-action@v13.2.0
-        with:
-          args: deploy --only storage
+      - name: 📤 Upload model and version to Firebase Storage
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-          PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
+        run: |
+          echo "Uploading model to Firebase Storage..."
+
+          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
+            -F "file=@best_flower_model_v3.pt" \
+            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=best_flower_model_v3.pt"
+
+          echo "Uploading version file to Firebase Storage..."
+
+          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
+            -F "file=@model_version.txt" \
+            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=model_version.txt"
