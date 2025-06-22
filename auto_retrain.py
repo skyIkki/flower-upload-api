@@ -1,15 +1,26 @@
-# auto_retrain.py
 import os
+import io
+import zipfile
+import requests
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms, models
 from torch.utils.data import DataLoader
-from datetime import datetime
 
+# 1. Download and extract the latest training data
+DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data"
+print("📦 Downloading training data...")
+response = requests.get(DOWNLOAD_URL)
+if response.status_code != 200:
+    raise Exception(f"Failed to download training data: {response.text}")
+with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+    zip_ref.extractall("training_data")
+print("✅ Extracted training data.")
+
+# 2. Setup training
 DATA_DIR = "training_data"
 MODEL_OUTPUT = "best_flower_model.pt"
 
-# Define transforms
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -17,17 +28,16 @@ transform = transforms.Compose([
                          [0.229, 0.224, 0.225])
 ])
 
-# Load dataset
 dataset = datasets.ImageFolder(DATA_DIR, transform=transform)
 loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-# Model
+# 3. Build model
 model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-model.fc = nn.Linear(model.fc.in_features, 102)
+model.fc = nn.Linear(model.fc.in_features, len(dataset.classes))
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
-# Train
+# 4. Train
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 model.train()
@@ -40,7 +50,7 @@ for epoch in range(5):
         loss.backward()
         optimizer.step()
 
-# Save model
+# 5. Save model
 model.eval()
 scripted_model = torch.jit.script(model)
 scripted_model.save(MODEL_OUTPUT)
