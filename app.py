@@ -1,5 +1,4 @@
-# app.py
-from flask import Flask, request
+from flask import Flask, request, send_from_directory, render_template_string
 import os
 from datetime import datetime
 
@@ -21,6 +20,35 @@ def upload():
     image.save(path)
 
     return "Uploaded successfully", 200
+
+@app.route('/list')
+def list_images():
+    root_dir = "training_data"
+    image_data = {}
+
+    for label in os.listdir(root_dir):
+        label_dir = os.path.join(root_dir, label)
+        if os.path.isdir(label_dir):
+            images = os.listdir(label_dir)
+            image_data[label] = images
+
+    html = """
+    <h2>🌼 Uploaded Flower Images</h2>
+    {% for label, images in image_data.items() %}
+        <h3>{{ label }}</h3>
+        {% for img in images %}
+            <div style="display:inline-block;margin:10px;">
+                <img src="/image/{{ label }}/{{ img }}" height="150"><br>
+                {{ img }}
+            </div>
+        {% endfor %}
+    {% endfor %}
+    """
+    return render_template_string(html, image_data=image_data)
+
+@app.route('/image/<label>/<filename>')
+def serve_image(label, filename):
+    return send_from_directory(os.path.join("training_data", label), filename)
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
