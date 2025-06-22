@@ -24,8 +24,25 @@ jobs:
       - name: 🧠 Run training script
         run: python auto_retrain.py
 
-      - name: 📤 Upload model artifact
+      - name: 📤 Upload model artifact to GitHub (optional)
         uses: actions/upload-artifact@v4
         with:
           name: best_flower_model
           path: best_flower_model_v3.pt
+
+      - name: 🚀 Deploy model to Firebase Storage
+        uses: w9jds/firebase-action@v13.2.0
+        with:
+          args: deploy --only storage
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+
+      - name: ☁️ Upload to Firebase manually (alternative)
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > firebase-key.json
+          npm install -g firebase-tools
+          firebase auth:login:ci --token "$(jq -r .token < firebase-key.json)"
+          firebase deploy --only storage
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
