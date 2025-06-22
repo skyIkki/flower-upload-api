@@ -5,3 +5,5 @@ torchvision==0.22.1
 Pillow
 numpy<2
 requests
+scipy
+scikit-learn
