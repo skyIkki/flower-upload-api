@@ -24,25 +24,32 @@ jobs:
       - name: 🧠 Run training script
         run: python auto_retrain.py
 
-      - name: 📤 Upload model artifact to GitHub (optional)
-        uses: actions/upload-artifact@v4
-        with:
-          name: best_flower_model
-          path: best_flower_model_v3.pt
-
-      - name: 🚀 Deploy model to Firebase Storage
-        uses: w9jds/firebase-action@v13.2.0
-        with:
-          args: deploy --only storage
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-
-      - name: ☁️ Upload to Firebase manually (alternative)
+      - name: 📄 Auto-increment model_version.txt
         run: |
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > firebase-key.json
-          npm install -g firebase-tools
-          firebase auth:login:ci --token "$(jq -r .token < firebase-key.json)"
-          firebase deploy --only storage
+          VERSION_FILE="model_version.txt"
+
+          if [[ -f "$VERSION_FILE" ]]; then
+            OLD_VERSION=$(cat "$VERSION_FILE")
+            OLD_NUMBER=${OLD_VERSION//[!0-9]/}
+            NEW_NUMBER=$((OLD_NUMBER + 1))
+            echo "v$NEW_NUMBER" > "$VERSION_FILE"
+          else
+            echo "v1" > "$VERSION_FILE"
+          fi
+
+          echo "✅ New model version: $(cat $VERSION_FILE)"
+
+      - name: 📤 Upload model and version to Firebase Storage
         env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          # Upload the PyTorch model
+          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
+            -F "file=@best_flower_model_v3.pt" \
+            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_PROJECT_ID}.appspot.com/o?name=best_flower_model_v3.pt"
+
+          # Upload the updated version file
+          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
+            -F "file=@model_version.txt" \
+            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_PROJECT_ID}.appspot.com/o?name=model_version.txt"
