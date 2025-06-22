@@ -8,8 +8,7 @@ import scipy.io
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms, models
-from torch.utils.data import DataLoader
-from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, ConcatDataset
 import requests
 
 # ---------------------------
@@ -32,75 +31,85 @@ transform = transforms.Compose([
 ])
 
 # ---------------------------
-# 1. Try to download uploaded data
+# 1. Download and prepare Oxford 102 Flower dataset
 # ---------------------------
-os.makedirs("training_data", exist_ok=True)
+print("⬇️ Downloading and preparing Oxford 102 Flowers dataset...")
 
+FLOWER_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
+LABELS_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
+SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
+
+urllib.request.urlretrieve(FLOWER_URL, "102flowers.tgz")
+urllib.request.urlretrieve(LABELS_URL, "imagelabels.mat")
+urllib.request.urlretrieve(SETID_URL, "setid.mat")
+
+with tarfile.open("102flowers.tgz") as tar:
+    tar.extractall()
+
+labels = scipy.io.loadmat("imagelabels.mat")["labels"][0]
+setid = scipy.io.loadmat("setid.mat")
+train_ids = setid["trnid"][0]
+val_ids = setid["valid"][0]
+
+def prepare_split(image_ids, target_dir):
+    os.makedirs(target_dir, exist_ok=True)
+    for i in image_ids:
+        label = f"{labels[i - 1]:03d}"
+        label_dir = os.path.join(target_dir, label)
+        os.makedirs(label_dir, exist_ok=True)
+        src = os.path.join("jpg", f"image_{i:05d}.jpg")
+        dst = os.path.join(label_dir, f"image_{i:05d}.jpg")
+        shutil.copy(src, dst)
+
+prepare_split(train_ids, os.path.join(BASE_DIR, "train"))
+print("✅ Oxford 102 Flowers dataset prepared.")
+
+# ---------------------------
+# 2. Download uploaded user data (if available)
+# ---------------------------
 print("📦 Checking for uploaded training data...")
-use_uploaded_data = False
+user_data_dir = "user_training_data"
+os.makedirs(user_data_dir, exist_ok=True)
+
 try:
     response = requests.get(DOWNLOAD_URL)
     if response.status_code == 200:
         with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
-            zip_ref.extractall("training_data")
-        if os.listdir("training_data"):
-            print("✅ Extracted uploaded training data.")
-            use_uploaded_data = True
+            zip_ref.extractall(user_data_dir)
+        if os.listdir(user_data_dir):
+            print(f"✅ Found user-uploaded data: {len(os.listdir(user_data_dir))} folders.")
+        else:
+            print("ℹ️ No images in uploaded data.")
+    else:
+        print("❌ Failed to download uploaded data (non-200).")
 except Exception as e:
-    print("❌ Failed to fetch uploaded data:", e)
+    print("❌ Failed to download uploaded data:", e)
 
 # ---------------------------
-# 2. Fallback: Use 102flowers.tgz
+# 3. Load and merge datasets
 # ---------------------------
-if not use_uploaded_data:
-    print("⬇️  No uploaded data found. Downloading 102flowers.tgz...")
+print("📂 Loading datasets...")
 
-    FLOWER_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
-    LABELS_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
-    SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
+oxford_dataset = datasets.ImageFolder(os.path.join(BASE_DIR, "train"), transform=transform)
 
-    urllib.request.urlretrieve(FLOWER_URL, "102flowers.tgz")
-    urllib.request.urlretrieve(LABELS_URL, "imagelabels.mat")
-    urllib.request.urlretrieve(SETID_URL, "setid.mat")
+# Merge with user-uploaded dataset (if exists)
+if os.path.exists(user_data_dir) and os.listdir(user_data_dir):
+    user_dataset = datasets.ImageFolder(user_data_dir, transform=transform)
 
-    with tarfile.open("102flowers.tgz") as tar:
-        tar.extractall()
-
-    labels = scipy.io.loadmat("imagelabels.mat")["labels"][0]
-    setid = scipy.io.loadmat("setid.mat")
-    train_ids = setid["trnid"][0]
-    val_ids = setid["valid"][0]
-
-    def prepare_split(image_ids, target_dir):
-        os.makedirs(target_dir, exist_ok=True)
-        for i in image_ids:
-            label = f"{labels[i-1]:03d}"
-            label_dir = os.path.join(target_dir, label)
-            os.makedirs(label_dir, exist_ok=True)
-            src = os.path.join("jpg", f"image_{i:05d}.jpg")
-            dst = os.path.join(label_dir, f"image_{i:05d}.jpg")
-            shutil.copy(src, dst)
-
-    prepare_split(train_ids, os.path.join(BASE_DIR, "train"))
-    prepare_split(val_ids, os.path.join(BASE_DIR, "val"))
-
-    print("✅ 102flowers dataset prepared.")
-
-    DATA_DIR = os.path.join(BASE_DIR, "train")
+    # Combine Oxford + user-uploaded
+    merged_dataset = ConcatDataset([oxford_dataset, user_dataset])
+    print(f"✅ Total combined classes: {len(set(oxford_dataset.classes + user_dataset.classes))}")
 else:
-    DATA_DIR = "training_data"
+    merged_dataset = oxford_dataset
+    print(f"✅ Total Oxford classes only: {len(oxford_dataset.classes)}")
 
-# ---------------------------
-# 3. Load dataset
-# ---------------------------
-dataset = datasets.ImageFolder(DATA_DIR, transform=transform)
-loader = DataLoader(dataset, batch_size=32, shuffle=True)
-num_classes = len(dataset.classes)
-print(f"📊 Classes found: {num_classes}")
+loader = DataLoader(merged_dataset, batch_size=32, shuffle=True)
 
 # ---------------------------
 # 4. Build & train model
 # ---------------------------
+num_classes = len(set(oxford_dataset.classes + (user_dataset.classes if 'user_dataset' in locals() else [])))
+
 model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 model.fc = nn.Linear(model.fc.in_features, num_classes)
 model.to(DEVICE)
