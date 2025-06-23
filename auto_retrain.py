@@ -55,7 +55,7 @@ SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
 # Training Hyperparameters
 BATCH_SIZE = 32
 LEARNING_RATE = 0.001
-NUM_EPOCHS = 5
+NUM_EPOCHS = 15
 VALIDATION_SPLIT_RATIO = 0.2 # 20% of merged data for validation
 
 # ---------------------------
