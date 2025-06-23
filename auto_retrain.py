@@ -326,7 +326,7 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
 
     # Learning rate scheduler
     # scheduler = torch.optim.lr_scheduler.ReduceLOnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True) # verbose=True added
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True) # verbose=True added
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
     for epoch in range(num_epochs):
         model.train()
