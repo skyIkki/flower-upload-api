@@ -320,16 +320,19 @@ def build_model(num_classes):
     logging.info(f"Model built with {num_classes} output classes.")
     return model
 
-# ... (everything before remains the same)
+# ... (code before train_model)
 
 def train_model(model, train_loader, val_loader, num_epochs, criterion, optimizer):
     """Trains the model."""
     logging.info("📚 Starting model training...")
     best_val_loss = float('inf')  # Track best validation loss for checkpointing
 
+    # This line needs to be consistently indented, usually 4 spaces from the 'def'
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
+    # This 'for' loop should also be indented 4 spaces from the 'def'
     for epoch in range(num_epochs):
+        # All lines inside the 'for' loop should be indented 8 spaces
         model.train()
         total_train_loss = 0
         correct_train = 0
@@ -348,7 +351,7 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
             total_train += labels.size(0)
             correct_train += (predicted == labels).sum().item()
 
-            if batch_idx % 50 == 0:  # Log every 50 batches
+            if batch_idx % 50 == 0:
                 logging.debug(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}/{len(train_loader)}, Train Loss: {loss.item():.4f}")
 
         avg_train_loss = total_train_loss / len(train_loader)
