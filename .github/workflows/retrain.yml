@@ -1,83 +1,116 @@
-name: Retrain Flower Model
+name: 🌸 Retrain Flower Model (CI/CD)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual triggering from the GitHub Actions UI
 
 jobs:
-  train:
+  train_and_deploy_model: # Renamed for clearer purpose
     runs-on: ubuntu-latest
+    environment: production # Use an environment for better secrets management and deployment tracking
 
     steps:
-      - name: 📥 Checkout code
+      - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 🐍 Set up Python
+      - name: 🐍 Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # Cache pip dependencies for faster installs
 
-      - name: 📦 Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: 📦 Install Python Dependencies
+        run: pip install -r requirements.txt # Assuming requirements.txt is kept up-to-date
 
-      - name: 🧠 Run training script
+      - name: 🧠 Run Model Training Script
+        id: run_training # Add an ID to reference outputs if needed later
         run: python auto_retrain.py
+        # You might want to add outputs from your Python script here,
+        # e.g., if it returns the path to the model or its performance metrics.
 
-      - name: 📥 Download latest model_version.txt from Firebase
+      - name: ⬇️ Download Current Model Version (from Firebase)
+        id: download_version # Add an ID for better referencing
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          # Use explicit 'secrets.FIREBASE_SERVICE_ACCOUNT_KEY' or similar if you have a service account for better auth
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }} # Ensure this token has read permissions
           FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
         run: |
-          curl -X GET -L \
+          # Attempt to download the current version. If it fails (e.g., file doesn't exist),
+          # default to 'v0'. Using a variable for the output file for consistency.
+          VERSION_FILE="model_version.txt"
+          curl -sS -X GET -L \
             -H "Authorization: Bearer $FIREBASE_TOKEN" \
-            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o/model_version.txt?alt=media" \
-            -o model_version.txt || echo "v0" > model_version.txt
+            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o/${VERSION_FILE}?alt=media" \
+            -o "${VERSION_FILE}" || echo "v0" > "${VERSION_FILE}"
 
-      - name: 📄 Auto-increment model_version.txt
+          # Ensure the file exists for subsequent steps, even if curl failed
+          if [ ! -f "${VERSION_FILE}" ]; then
+              echo "v0" > "${VERSION_FILE}"
+              echo "::warning ::model_version.txt was not downloaded, defaulting to v0."
+          fi
+          echo "Current model version: $(cat ${VERSION_FILE})"
+
+      - name: ⬆️ Increment Model Version
+        id: increment_version # Add an ID for potential output
         run: |
           VERSION_FILE="model_version.txt"
-
           OLD_VERSION=$(cat "$VERSION_FILE")
-          OLD_NUMBER=${OLD_VERSION//[!0-9]/}
+          # Extract only digits, handle potential 'v' prefix
+          OLD_NUMBER=$(echo "$OLD_VERSION" | sed 's/[^0-9]*//g')
           NEW_NUMBER=$((OLD_NUMBER + 1))
-          echo "v$NEW_NUMBER" > "$VERSION_FILE"
+          NEW_VERSION="v$NEW_NUMBER"
+          echo "$NEW_VERSION" > "$VERSION_FILE"
+          echo "✅ New model version: $NEW_VERSION"
+          # Make the new version available to subsequent steps
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
-          echo "✅ New model version: $(cat $VERSION_FILE)"
-
-
-      - name: 📤 Upload model and version to Firebase Storage
+      - name: 🚀 Upload Assets to Firebase Storage
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }} # Ensure this token has write permissions
           FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
+          # Get the new version from the previous step's output
+          MODEL_VERSION: ${{ steps.increment_version.outputs.new_version }}
         run: |
-          echo "Uploading model to Firebase Storage..."
+          echo "Starting upload of model assets to Firebase Storage..."
 
-          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-            -F "file=@best_flower_model_v3.pt" \
-            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=best_flower_model_v3.pt"
+          # Define files to upload and their target names in storage
+          declare -A files_to_upload
+          files_to_upload["best_flower_model_v3.pt"]="best_flower_model_v3.pt"
+          files_to_upload["model_version.txt"]="model_version.txt"
+          files_to_upload["class_to_label.json"]="class_to_label.json"
 
-          echo "Uploading version file to Firebase Storage..."
+          for local_path in "${!files_to_upload[@]}"; do
+            storage_path="${files_to_upload[$local_path]}"
+            echo "Uploading $local_path to $storage_path..."
 
-          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-            -F "file=@model_version.txt" \
-            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=model_version.txt"
-              echo "Uploading class-to-label mapping..."
+            if [ -f "$local_path" ]; then
+              curl -sS -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
+                -F "file=@$local_path" \
+                "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=$storage_path" \
+                && echo "✅ Successfully uploaded $local_path" \
+                || { echo "❌ Failed to upload $local_path"; exit 1; }
+            else
+              # Fail the workflow if a required file is missing (e.g., the model or class map)
+              if [[ "$local_path" == "best_flower_model_v3.pt" || "$local_path" == "class_to_label.json" ]]; then
+                echo "❌ Error: Required file '$local_path' not found. Aborting upload."
+                exit 1
+              else
+                echo "⚠️ Warning: Optional file '$local_path' not found. Skipping upload."
+              fi
+            fi
+          done
 
-      - name: 📤 Upload class-to-label mapping to Firebase Storage
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-          FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
+          echo "All specified assets upload process completed."
+
+      # Optional: Add a step to notify on success/failure (e.g., Slack, Teams, email)
+      - name: 🔔 Notify on Completion
+        if: always() # Run this step regardless of success or failure
         run: |
-          echo "Uploading class_to_label.json to Firebase Storage..."
-
-          if [ -f class_to_label.json ]; then
-            curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-              -F "file=@class_to_label.json" \
-              "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=class_to_label.json"
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✨ Model retraining and deployment successful!"
           else
-            echo "❌ class_to_label.json not found!"
-            exit 1
+            echo "🚨 Model retraining and deployment failed!"
           fi
-
-
+          # You could integrate a notification action here
+          # uses: some-action/notify@v1
+          # with:
+          #   message: "Model retraining ${{ job.status }} for version ${{ steps.increment_version.outputs.new_version }}"
