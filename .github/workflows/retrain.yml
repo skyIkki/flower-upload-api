@@ -76,7 +76,7 @@ jobs:
           declare -A files_to_upload
           files_to_upload["best_flower_model_v3.pt"]="best_flower_model_v3.pt"
           files_to_upload["model_version.txt"]="model_version.txt"
-          
+          files_to_upload["class_to_label.json"]="class_to_label.json"
 
           for local_path in "${!files_to_upload[@]}"; do
             storage_path="${files_to_upload[$local_path]}"
