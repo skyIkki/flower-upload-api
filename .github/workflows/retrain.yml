@@ -64,7 +64,20 @@ jobs:
             "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=model_version.txt"
               echo "Uploading class-to-label mapping..."
 
-          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-            -F "file=@class_to_label.json" \
-            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=class_to_label.json"
+      - name: 📤 Upload class-to-label mapping to Firebase Storage
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
+        run: |
+          echo "Uploading class_to_label.json to Firebase Storage..."
+
+          if [ -f class_to_label.json ]; then
+            curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
+              -F "file=@class_to_label.json" \
+              "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=class_to_label.json"
+          else
+            echo "❌ class_to_label.json not found!"
+            exit 1
+          fi
+
 
