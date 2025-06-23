@@ -1,8 +1,34 @@
 # auto_retrain.py
 
 # ... (rest of your imports and initial config)
-
+import os
+import io
+import zipfile
+import urllib.request
+import tarfile
+import shutil
+import scipy.io
+import torch
+import torch.nn as nn
+from torchvision import datasets, transforms, models
+from torch.utils.data import DataLoader, ConcatDataset, random_split
+import requests
+import json
+import logging # <--- THIS LINE NEEDS TO BE HERE!
 import random # For setting random seeds
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Set random seeds for reproducibility
+def set_all_seeds(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    random.seed(seed)
+    # np.random.seed(seed) # If you use numpy
+set_all_seeds(42) # You can choose any integer seed
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
