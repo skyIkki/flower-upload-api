@@ -383,8 +383,7 @@ for epoch in range(num_epochs):
             # Save only the state_dict (weights)
             torch.save(model.state_dict(), "best_model_weights.pth")
             logging.info(f"Saving best model weights with validation loss: {best_val_loss:.4f}")
-
-    logging.info("✅ Training complete.")
+logging.info("✅ Training complete.")
 
     # Load the best weights back into the model before scripting
     if os.path.exists("best_model_weights.pth"):
