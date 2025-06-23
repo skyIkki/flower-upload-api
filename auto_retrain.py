@@ -325,8 +325,9 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
     logging.info("📚 Starting model training...")
     best_val_loss = float('inf') # Track best validation loss for checkpointing
 
-    # Learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
+# auto_retrain.py (Line 329)
+# OLD: scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
     for epoch in range(num_epochs):
         model.train()
