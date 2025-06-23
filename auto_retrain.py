@@ -386,7 +386,7 @@ for epoch in range(num_epochs):
 logging.info("✅ Training complete.")
 
     # Load the best weights back into the model before scripting
-    if os.path.exists("best_model_weights.pth"):
+if os.path.exists("best_model_weights.pth"):
         model.load_state_dict(torch.load("best_model_weights.pth"))
         logging.info("Loaded best model weights for final saving.")
     return model
