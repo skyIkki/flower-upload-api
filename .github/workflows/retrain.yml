@@ -62,3 +62,9 @@ jobs:
           curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
             -F "file=@model_version.txt" \
             "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=model_version.txt"
+              echo "Uploading class-to-label mapping..."
+
+          curl -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
+            -F "file=@class_to_label.json" \
+            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=class_to_label.json"
+
