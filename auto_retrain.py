@@ -137,3 +137,21 @@ model.eval()
 scripted_model = torch.jit.script(model)
 scripted_model.save(MODEL_OUTPUT)
 print(f"✅ Saved model as {MODEL_OUTPUT}")
+
+import json
+
+# Use dataset.classes or handle ConcatDataset
+if hasattr(merged_dataset, 'datasets'):
+    all_classes = merged_dataset.datasets[0].classes
+    if len(merged_dataset.datasets) > 1:
+        all_classes += merged_dataset.datasets[1].classes
+    classes = sorted(list(set(all_classes)))
+else:
+    classes = merged_dataset.classes
+
+idx_to_label = {i: label for i, label in enumerate(classes)}
+with open("class_to_label.json", "w") as f:
+    json.dump(idx_to_label, f)
+
+print("✅ Saved class-to-label mapping to class_to_label.json")
+
