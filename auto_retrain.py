@@ -320,15 +320,16 @@ def build_model(num_classes):
     logging.info(f"Model built with {num_classes} output classes.")
     return model
 
+# ... (everything before remains the same)
+
 def train_model(model, train_loader, val_loader, num_epochs, criterion, optimizer):
     """Trains the model."""
     logging.info("📚 Starting model training...")
-    best_val_loss = float('inf') # Track best validation loss for checkpointing
+    best_val_loss = float('inf')  # Track best validation loss for checkpointing
 
-# auto_retrain.py (Line 329)
-# OLD: scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
-for epoch in range(num_epochs):
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+
+    for epoch in range(num_epochs):
         model.train()
         total_train_loss = 0
         correct_train = 0
@@ -347,7 +348,7 @@ for epoch in range(num_epochs):
             total_train += labels.size(0)
             correct_train += (predicted == labels).sum().item()
 
-            if batch_idx % 50 == 0: # Log every 50 batches
+            if batch_idx % 50 == 0:  # Log every 50 batches
                 logging.debug(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}/{len(train_loader)}, Train Loss: {loss.item():.4f}")
 
         avg_train_loss = total_train_loss / len(train_loader)
@@ -380,85 +381,14 @@ for epoch in range(num_epochs):
         # Save the best model weights based on validation loss
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            # Save only the state_dict (weights)
             torch.save(model.state_dict(), "best_model_weights.pth")
             logging.info(f"Saving best model weights with validation loss: {best_val_loss:.4f}")
-logging.info("✅ Training complete.")
+
+    logging.info("✅ Training complete.")
 
     # Load the best weights back into the model before scripting
-if os.path.exists("best_model_weights.pth"):
+    if os.path.exists("best_model_weights.pth"):
         model.load_state_dict(torch.load("best_model_weights.pth"))
         logging.info("Loaded best model weights for final saving.")
+
     return model
-
-def save_model_and_mapping(model, common_names):
-    """Saves the TorchScript model and class-to-label mapping."""
-    model.eval() # Set to eval mode before scripting
-
-    scripted_model = torch.jit.script(model)
-    scripted_model.save(MODEL_OUTPUT)
-    logging.info(f"✅ Saved TorchScript model as {MODEL_OUTPUT}")
-
-    # Create and save class-to-label mapping
-    # This mapping directly contains common names
-    idx_to_label = {i: label for i, label in enumerate(common_names)}
-    with open(CLASS_MAPPING_FILE, "w") as f:
-        json.dump(idx_to_label, f, indent=4) # Use indent for readability
-    logging.info(f"✅ Saved class-to-label mapping to {CLASS_MAPPING_FILE}")
-
-def cleanup_files():
-    """Removes downloaded and extracted temporary files."""
-    logging.info("🧹 Starting cleanup of temporary files...")
-    files_to_remove = ["102flowers.tgz", "imagelabels.mat", "setid.mat", "best_model_weights.pth"]
-    dirs_to_remove = ["jpg", BASE_DIR, USER_DATA_DIR] # BASE_DIR includes OXFORD_TRAIN_DIR/OXFORD_VAL_DIR
-
-    for f in files_to_remove:
-        if os.path.exists(f):
-            os.remove(f)
-            logging.debug(f"Removed file: {f}")
-    for d in dirs_to_remove:
-        if os.path.exists(d):
-            shutil.rmtree(d)
-            logging.debug(f"Removed directory: {d}")
-    logging.info("✅ Cleanup complete.")
-
-# ---------------------------
-# MAIN EXECUTION
-# ---------------------------
-if __name__ == "__main__":
-    try:
-        # 1. Download and prepare Oxford 102 Flower dataset
-        download_and_extract_oxford_data()
-        labels_mat = scipy.io.loadmat("imagelabels.mat")["labels"][0]
-        setid_mat = scipy.io.loadmat("setid.mat")
-        train_ids = setid_mat["trnid"][0]
-        val_ids = setid_mat["valid"][0]
-        prepare_oxford_splits(labels_mat, train_ids, val_ids)
-
-        # 2. Download uploaded user data (if available)
-        download_user_data()
-
-        # 3. Load and merge datasets
-        # This will return loaders with targets remapped to 0-indexed common names
-        train_loader, val_loader, final_common_names, num_classes = get_merged_datasets()
-
-        # 4. Build & train model
-        model = build_model(num_classes)
-        criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-
-        # Train the model (it will save best_model_weights.pth)
-        trained_model = train_model(model, train_loader, val_loader, NUM_EPOCHS, criterion, optimizer)
-
-        # 5. Save TorchScript model and class mapping
-        # The common_names list now ensures the JSON has human-readable names
-        save_model_and_mapping(trained_model, final_common_names)
-
-    except Exception as e:
-        logging.critical(f"🔥 Model retraining process failed: {e}", exc_info=True)
-        # Re-raise the exception to ensure the CI/CD pipeline fails
-        raise
-
-    finally:
-        # 6. Clean up downloaded files regardless of success/failure
-        cleanup_files()
