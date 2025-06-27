@@ -192,117 +192,126 @@ def get_merged_datasets():
     Loads and merges Oxford and user-uploaded datasets.
     Maps Oxford's numeric folder names (e.g., "001") to common names.
     Ensures unified class mapping across all datasets.
+    
+    MODIFIED: This version will *exclude* Oxford classes from the final class mapping
+    and from the training/validation datasets that use these specific class labels.
     """
     logging.info("📂 Loading datasets...")
 
-    # Load Oxford datasets (classes will be like ['001', '002', ...])
-    # The 'transform' here determines how images are processed.
+    # Load Oxford datasets for structural parsing, but their classes won't be mapped
     oxford_train_dataset = datasets.ImageFolder(OXFORD_TRAIN_DIR, transform=train_transform)
     oxford_val_dataset = datasets.ImageFolder(OXFORD_VAL_DIR, transform=val_transform)
 
-    # Convert Oxford's numeric class names (e.g., "001") to common names
-    # This list will contain the common names for all classes from Oxford
-    oxford_common_names_from_codes = [OXFORD_CODE_TO_NAME_MAP.get(code, code) for code in oxford_train_dataset.classes]
+    # Initialize combined unique classes *only* with user-provided common names
+    all_unique_common_names = set()
 
-    # Initialize combined unique classes with Oxford's common names
-    all_unique_common_names = set(oxford_common_names_from_codes)
-
-    user_dataset = None # Initialize user_dataset as None
+    user_dataset = None
     if os.path.exists(USER_DATA_DIR) and os.listdir(USER_DATA_DIR):
         try:
-            # Load user dataset (classes are assumed to be common names directly)
             user_dataset = datasets.ImageFolder(USER_DATA_DIR, transform=train_transform)
-            if user_dataset and len(user_dataset) > 0: # Check if dataset is not empty
+            if user_dataset and len(user_dataset) > 0:
                 logging.info(f"Adding {len(user_dataset)} images from user-uploaded data with {len(user_dataset.classes)} classes.")
-                # Update the set of all unique common names with user-provided class names
+                # Add user-provided class names directly to the set of unique common names
                 all_unique_common_names.update(user_dataset.classes)
             else:
                 logging.info("User dataset directory found, but it appears empty or could not load any images.")
-                user_dataset = None # Ensure it's None if empty
+                user_dataset = None
         except Exception as e:
             logging.warning(f"Could not load user dataset from '{USER_DATA_DIR}': {e}. Proceeding without it.")
-            user_dataset = None # Ensure it's None if loading fails
+            user_dataset = None
 
-    logging.info(f"✅ Total unique common names for training: {len(all_unique_common_names)}")
+    if not all_unique_common_names:
+        logging.critical("No user-uploaded classes found. Cannot train a model without any classes.")
+        raise ValueError("No user-uploaded classes available for training.")
+
+    logging.info(f"✅ Total unique common names for training (user-only): {len(all_unique_common_names)}")
 
     # Sort the unique common names alphabetically to ensure consistent indexing
-    # This sorted list will define the final 0-indexed mapping for the model's output
     final_sorted_common_names = sorted(list(all_unique_common_names))
 
-    # --- Re-map dataset targets to unified indices ---
-    # This is a crucial step to ensure the model outputs match the unified indices.
-    # We need to map the original string labels (e.g., "001", "rose") to the new
-    # numerical indices (0, 1, 2...) based on `final_sorted_common_names`.
-
-    # Create a mapping from old class strings (folder names) to new unified indices (0, 1, 2...)
+    # Create a mapping from common name strings to new unified indices (0, 1, 2...)
     class_string_to_unified_idx = {name: i for i, name in enumerate(final_sorted_common_names)}
 
     def remap_targets(dataset, is_oxford):
-        # Create a new list of (image_path, new_unified_index) tuples
         remapped_samples = []
         for img_path, original_idx in dataset.samples:
             original_class_string = dataset.classes[original_idx]
+            
+            common_name = original_class_string # For user data, it's already common name
             if is_oxford:
-                # Map '001' to 'pink primrose', then 'pink primrose' to its new unified index
+                # For Oxford data, convert code to common name, but this common name
+                # might not be in our final mapping (which is user-only)
                 common_name = OXFORD_CODE_TO_NAME_MAP.get(original_class_string, original_class_string)
-            else:
-                # User data class strings are already common names (as loaded by ImageFolder)
-                common_name = original_class_string
-
+            
             unified_idx = class_string_to_unified_idx.get(common_name)
+            
             if unified_idx is None:
-                logging.warning(f"Class '{common_name}' for image '{img_path}' not found in unified mapping. Skipping image.")
-                continue # Skip images with unmapped classes
+                # This image's class is not in our final set of classes (user-only)
+                logging.debug(f"Skipping image '{img_path}' with class '{common_name}' as it's not in the final user-defined class set.")
+                continue # Skip images with unmapped classes (i.e., Oxford classes)
+            
             remapped_samples.append((img_path, unified_idx))
 
         # Update the dataset's internal samples, classes, and class_to_idx
-        # This modifies the the ImageFolder instance in place.
         dataset.samples = remapped_samples
-        dataset.classes = final_sorted_common_names # Update dataset classes to be common names
-        dataset.class_to_idx = class_string_to_unified_idx # Update class_to_idx
+        dataset.classes = final_sorted_common_names # Now only user-defined common names
+        dataset.class_to_idx = class_string_to_unified_idx # Now only user-defined common names
 
-    logging.info("Remapping dataset labels to unified common name indices...")
+    logging.info("Remapping dataset labels to unified common name indices (user-only)...")
+    
+    # Remap user_dataset if it exists
+    if user_dataset is not None:
+        remap_targets(user_dataset, is_oxford=False)
+    
+    # Remap Oxford datasets (this will effectively filter them out if their classes
+    # are not present in `class_string_to_unified_idx`)
     remap_targets(oxford_train_dataset, is_oxford=True)
     remap_targets(oxford_val_dataset, is_oxford=True)
-    if user_dataset is not None: # Only remap if user_dataset was successfully loaded
-        remap_targets(user_dataset, is_oxford=False)
+    
     logging.info("Dataset label remapping complete.")
 
-    # Recreate the merged_train_dataset with the remapped individual datasets
-    # This is critical after the in-place remapping of `samples` in ImageFolder.
-    if user_dataset is not None:
-        final_train_source_dataset = ConcatDataset([oxford_train_dataset, user_dataset])
-    else:
-        final_train_source_dataset = oxford_train_dataset
+    # The training source should now ONLY be the (filtered) user_dataset
+    final_train_source_dataset = user_dataset # This is the main training data
 
-    # Split the *remapped* merged_train_dataset into training and validation subsets
-    # This creates a validation split from the combined data.
-    train_size = int((1 - VALIDATION_SPLIT_RATIO) * len(final_train_source_dataset))
-    val_size = len(final_train_source_dataset) - train_size
+    # Validation split comes ONLY from user_dataset as well,
+    # and the oxford_val_dataset will be effectively empty for training purposes
+    # if its classes are not in the user-defined set.
     
-    # Handle case where dataset might be too small for split
+    train_size = int((1 - VALIDATION_SPLIT_RATIO) * len(final_train_source_dataset)) if final_train_source_dataset else 0
+    val_size = len(final_train_source_dataset) - train_size if final_train_source_dataset else 0
+    
+    if final_train_source_dataset is None or len(final_train_source_dataset) == 0:
+        logging.critical("No valid user training data after remapping. Cannot create loaders.")
+        raise ValueError("No user data for training after filtering.")
+
     if train_size == 0 or val_size == 0:
-        logging.warning("Dataset too small for a meaningful train/validation split. Adjusting sizes.")
+        logging.warning("User dataset too small for a meaningful train/validation split. Adjusting sizes.")
         if len(final_train_source_dataset) > 1:
             train_size = max(1, len(final_train_source_dataset) - 1)
             val_size = len(final_train_source_dataset) - train_size
         else:
-            # If only 0 or 1 image, make train_loader use all and val_loader empty
             train_size = len(final_train_source_dataset)
             val_size = 0
-            logging.warning("Very small dataset, validation set will be empty or minimal.")
+            logging.warning("Very small user dataset, validation set will be empty or minimal.")
 
     train_subset, val_subset = random_split(final_train_source_dataset, [train_size, val_size])
 
-    # Combine the validation split from the merged data AND the Oxford dedicated validation set
-    # This ensures comprehensive validation
-    final_val_dataset_combined = ConcatDataset([val_subset, oxford_val_dataset])
+    # The final validation dataset will now implicitly only contain user data
+    # because the oxford_val_dataset will have no samples after remapping
+    # if its classes aren't in the user-defined set.
+    # We still concatenate it here, but it won't add anything if filtered out.
+    final_val_dataset_combined = ConcatDataset([val_subset, oxford_val_dataset]) # oxford_val_dataset will be empty if its classes are not in user_data
 
     final_train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() // 2 or 1)
     final_val_loader = DataLoader(final_val_dataset_combined, batch_size=BATCH_SIZE, shuffle=False, num_workers=os.cpu_count() // 2 or 1)
 
     logging.info(f"Training loader size: {len(train_subset)} images, Validation loader size: {len(final_val_dataset_combined)} images.")
     return final_train_loader, final_val_loader, final_sorted_common_names, len(final_sorted_common_names)
+
+
+# The rest of the script (main execution, build_model, train_model, save_model_and_mapping, cleanup)
+# remains the same as it correctly uses the outputs of get_merged_datasets.
+
 
 def build_model(num_classes):
     """Builds and initializes the ResNet model."""
@@ -418,6 +427,8 @@ if __name__ == "__main__":
     logging.info("DEBUG: Entering main execution block of auto_retrain.py.")
 
     # 1. Download and prepare Oxford 102 Flower dataset
+    # (Keeping this step to ensure 'jpg' and 'flowers' directories are set up,
+    # but their content won't be used for class mapping or training.)
     try:
         logging.info("DEBUG: Attempting to download and prepare Oxford data.")
         download_and_extract_oxford_data()
