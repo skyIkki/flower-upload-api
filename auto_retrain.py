@@ -15,6 +15,11 @@ import logging
 import random
 import PIL.Image # Ensure PIL is imported for the UnifiedDataset
 
+# --- NEW IMPORTS FOR FIREBASE STORAGE ---
+import firebase_admin
+from firebase_admin import credentials, storage
+# ----------------------------------------
+
 # --- DEBUGGING LINES AT THE VERY TOP ---
 print("DEBUG: auto_retrain.py script execution started.")
 print(f"DEBUG: Current working directory: {os.getcwd()}")
@@ -41,21 +46,31 @@ logging.info("DEBUG: Random seeds set.")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_OUTPUT = "best_flower_model_v3.pt"
 CLASS_MAPPING_FILE = "class_to_label.json"
-DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data" # Your API endpoint for user data
+# REMOVED: DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data"
 USER_DATA_DIR = "user_training_data"
-# NEW: Path to your local base training data within the repository
 BASE_TRAINING_DATA_DIR = "base_training_data"
 
-# Oxford 102 Flowers dataset URLs (still not used for training data)
-FLOWER_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
-LABELS_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
-SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
+# NEW: Firebase Storage Bucket Name (CHECK THIS IN YOUR FIREBASE CONSOLE -> STORAGE)
+# It's usually something like 'your-project-id.appspot.com'
+FIREBASE_STORAGE_BUCKET = "flower-identification-c2ef6.appspot.com" # <--- VERIFY THIS IS YOUR ACTUAL BUCKET NAME
+
+# NEW: Path within Firebase Storage where user data is uploaded by the Android app
+FIREBASE_USER_DATA_PREFIX = "user_training_data/"
+
+# NEW: Path within Firebase Storage where the trained model and mapping will be uploaded
+FIREBASE_MODEL_UPLOAD_PREFIX = "" # Upload to root of bucket, or 'models/' if you prefer a subfolder
 
 # Training Hyperparameters
 BATCH_SIZE = 32
 LEARNING_RATE = 0.001
 NUM_EPOCHS = 15
 VALIDATION_SPLIT_RATIO = 0.2 # 20% of combined data for validation
+
+# Oxford 102 Flowers dataset URLs (still not used for training data)
+# These are kept for context but are not actively used for data loading anymore
+FLOWER_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
+LABELS_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
+SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
 
 # Oxford mapping (still not used for training data classes) - kept for completeness but not actively used for training class names
 OXFORD_CODE_TO_NAME_MAP = {
@@ -103,53 +118,81 @@ val_transform = transforms.Compose([
 ])
 
 # --- HELPER FUNCTIONS ---
-def download_and_extract_oxford_data():
-    logging.info("⬇️ Downloading and preparing Oxford 102 Flowers dataset (SKIPPED in main workflow).")
-    # This function is retained for completeness but is not called in main
-    # as we no longer want to train on Oxford data.
-    pass # Implementation removed/skipped
 
-def prepare_oxford_splits(labels, train_ids, val_ids, image_dir="jpg"):
-    logging.info("Preparing Oxford 102 Flowers dataset splits (SKIPPED in main workflow).")
-    # This function is retained for completeness but is not called in main.
-    pass # Implementation removed/skipped
+# NEW: Firebase Admin SDK Initialization
+def initialize_firebase_admin_sdk():
+    logging.info("Initializing Firebase Admin SDK...")
+    try:
+        # Load credentials from the environment variable (GitHub Secret)
+        service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY')
+        if service_account_json is None:
+            logging.critical("FIREBASE_SERVICE_ACCOUNT_KEY environment variable not found. Cannot initialize Firebase.")
+            raise ValueError("Firebase Service Account Key missing. Ensure it's set as a GitHub Secret.")
 
-def download_user_data():
-    """Downloads and extracts user-uploaded training data from the API."""
-    logging.info("📦 Checking for uploaded training data...")
-    # Ensure the directory exists, even if no data is downloaded
+        cred = credentials.Certificate(json.loads(service_account_json))
+        
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': FIREBASE_STORAGE_BUCKET
+        })
+        logging.info("Firebase Admin SDK initialized successfully.")
+    except Exception as e:
+        logging.error(f"Error initializing Firebase Admin SDK: {e}")
+        raise
+
+# REMOVED: download_and_extract_oxford_data() - no longer needed
+# REMOVED: prepare_oxford_splits() - no longer needed
+
+def download_user_data_from_firebase():
+    """Downloads user-uploaded training data from Firebase Storage."""
+    logging.info(f"📦 Checking for user-uploaded training data in Firebase Storage bucket '{FIREBASE_STORAGE_BUCKET}' under prefix '{FIREBASE_USER_DATA_PREFIX}'...")
+    
+    # Ensure the local directory exists
     os.makedirs(USER_DATA_DIR, exist_ok=True)
+    
+    bucket = storage.bucket() # Get the storage bucket object
 
     try:
-        response = requests.get(DOWNLOAD_URL, timeout=60) # Increased timeout
-        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
+        # List all blobs (files) under the specified prefix
+        blobs = bucket.list_blobs(prefix=FIREBASE_USER_DATA_PREFIX)
+        downloaded_files_count = 0
+        extracted_classes = set()
 
-        # Check if the response actually contains a ZIP file
-        if not response.headers.get('Content-Type') == 'application/zip':
-            logging.info("Received non-ZIP content from download URL. This might mean no user data is available or the API has no data to return. Skipping user data extraction.")
-            return
+        for blob in blobs:
+            # Skip "directory" blobs themselves (e.g., "user_training_data/class_name/")
+            if blob.name.endswith('/'):
+                continue
+            
+            # Construct local file path (e.g., user_training_data/rose/image1.jpg)
+            # Remove the FIREBASE_USER_DATA_PREFIX to get the relative path
+            # Example: blob.name = "user_training_data/rose/image1.jpg"
+            #          relative_path = "rose/image1.jpg"
+            relative_path = blob.name[len(FIREBASE_USER_DATA_PREFIX):]
+            local_file_path = os.path.join(USER_DATA_DIR, relative_path)
+            
+            # Ensure the local directory structure exists for the file
+            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            
+            try:
+                blob.download_to_filename(local_file_path)
+                downloaded_files_count += 1
+                
+                # Extract class name from the relative path (e.g., "rose" from "rose/image1.jpg")
+                class_name = relative_path.split(os.sep)[0] # os.sep handles / or \
+                if class_name:
+                    extracted_classes.add(class_name)
 
-        # If a ZIP is received, proceed to extract
-        with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
-            zip_ref.extractall(USER_DATA_DIR)
-
-        # Basic check to see if extraction yielded any directories (classes)
-        extracted_dirs = [d for d in os.listdir(USER_DATA_DIR) if os.path.isdir(os.path.join(USER_DATA_DIR, d))]
-        if extracted_dirs:
-            logging.info(f"✅ Found user-uploaded data in {len(extracted_dirs)} class folders.")
+                logging.debug(f"Downloaded: {blob.name} to {local_file_path}")
+            except Exception as e:
+                logging.warning(f"❌ Failed to download {blob.name}: {e}")
+                
+        if downloaded_files_count > 0:
+            logging.info(f"✅ Downloaded {downloaded_files_count} user images for {len(extracted_classes)} classes from Firebase Storage.")
         else:
-            logging.info("ℹ️ Downloaded ZIP, but no class subdirectories found inside it. User data may be empty.")
+            logging.info("ℹ️ No user-uploaded data found in Firebase Storage under the specified prefix.")
 
-    except requests.exceptions.Timeout:
-        logging.warning("❌ Request to download user data timed out.")
-    except requests.exceptions.ConnectionError:
-        logging.warning("❌ Connection error when trying to download user data. API might be down or unreachable.")
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"❌ Failed to download uploaded data (network/HTTP error): {e}")
-    except zipfile.BadZipFile:
-        logging.warning("❌ Downloaded file is not a valid ZIP archive (possibly empty or corrupted).")
     except Exception as e:
-        logging.warning(f"❌ An unexpected error occurred during user data download: {e}")
+        logging.warning(f"❌ An error occurred during Firebase Storage download: {e}")
+
 
 class UnifiedDataset(torch.utils.data.Dataset):
     """
@@ -244,7 +287,7 @@ def get_merged_datasets():
     # --- Finalize Combined Dataset ---
     if not all_raw_samples: # Check if there's any data at all
         logging.critical("No base or user-uploaded classes/images found for training. Aborting.")
-        raise ValueError("No data available for training. Ensure 'base_training_data' has images.")
+        raise ValueError("No data available for training. Ensure 'base_training_data' has images and/or user data is uploaded.")
 
     logging.info(f"✅ Total unique common names for training: {len(all_unique_common_names)}")
 
@@ -285,7 +328,7 @@ def get_merged_datasets():
     return final_train_loader, final_val_loader, final_sorted_common_names, len(final_sorted_common_names)
 
 
-# --- Rest of auto_retrain.py (build_model, train_model, save_model_and_mapping) ---
+# --- Model Building, Training, and Saving ---
 def build_model(num_classes):
     """Builds and initializes the ResNet model."""
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
@@ -301,7 +344,7 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
     """Trains the model."""
     logging.info("📚 Starting model training...")
     best_loss = float('inf') # Initialize best_loss to infinity
-    best_model_path = "best_model_weights.pth" # Path to save the best model weights
+    best_model_path = "best_model_weights.pth" # Path to save the best model weights locally
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
@@ -377,32 +420,82 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
         logging.warning("No 'best_model_weights.pth' found. Using the last epoch's model.")
     return model
 
+# NEW: Function to upload files to Firebase Storage
+def upload_to_firebase_storage(local_file_path, remote_blob_path):
+    """Uploads a file to Firebase Storage."""
+    try:
+        bucket = storage.bucket()
+        blob = bucket.blob(remote_blob_path)
+        blob.upload_from_filename(local_file_path)
+        logging.info(f"✅ Uploaded {local_file_path} to gs://{FIREBASE_STORAGE_BUCKET}/{remote_blob_path}")
+    except Exception as e:
+        logging.error(f"❌ Failed to upload {local_file_path} to Firebase Storage: {e}")
+        raise
+
 def save_model_and_mapping(model, classes):
-    """Saves the TorchScript model and class-to-label mapping."""
+    """Saves the TorchScript model and class-to-label mapping locally, then uploads to Firebase."""
     model.eval()
 
     # Ensure the model is on CPU for scripting if it was on GPU during training,
     # as scripted models are typically deployed to CPU environments.
     model_on_cpu = model.to('cpu')
     scripted_model = torch.jit.script(model_on_cpu)
+    
+    # Save model locally first
     scripted_model.save(MODEL_OUTPUT)
-    logging.info(f"✅ Saved TorchScript model as {MODEL_OUTPUT}")
+    logging.info(f"✅ Saved TorchScript model locally as {MODEL_OUTPUT}")
 
+    # Save class mapping locally first
     idx_to_label = {i: label for i, label in enumerate(classes)}
     with open(CLASS_MAPPING_FILE, "w") as f:
         json.dump(idx_to_label, f, indent=4)
-    logging.info(f"✅ Saved class-to-label mapping to {CLASS_MAPPING_FILE}")
+    logging.info(f"✅ Saved class-to-label mapping locally to {CLASS_MAPPING_FILE}")
+
+    # --- UPLOAD TO FIREBASE STORAGE ---
+    logging.info("⬆️ Uploading model and mapping files to Firebase Storage...")
+    upload_to_firebase_storage(MODEL_OUTPUT, os.path.join(FIREBASE_MODEL_UPLOAD_PREFIX, MODEL_OUTPUT))
+    upload_to_firebase_storage(CLASS_MAPPING_FILE, os.path.join(FIREBASE_MODEL_UPLOAD_PREFIX, CLASS_MAPPING_FILE))
+
+    # Increment model version (you'd need a model_version.txt in your repo or storage)
+    # This part requires managing model_version.txt's current state.
+    # A simple approach is to read, increment, then upload.
+    # For initial setup, you might just create it.
+    model_version_file = "model_version.txt"
+    current_version = 0
+    if os.path.exists(model_version_file):
+        try:
+            with open(model_version_file, "r") as f:
+                current_version = int(f.read().strip())
+        except ValueError:
+            logging.warning(f"Could not read integer from {model_version_file}. Starting version at 0.")
+            current_version = 0
+    
+    new_version = current_version + 1
+    with open(model_version_file, "w") as f:
+        f.write(str(new_version))
+    logging.info(f"Incremented model version to {new_version}")
+
+    upload_to_firebase_storage(model_version_file, os.path.join(FIREBASE_MODEL_UPLOAD_PREFIX, model_version_file))
+    logging.info("✅ Model version uploaded to Firebase Storage.")
+
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
     logging.info("DEBUG: Entering main execution block of auto_retrain.py.")
 
+    # NEW: Initialize Firebase Admin SDK first
+    try:
+        initialize_firebase_admin_sdk()
+    except Exception:
+        logging.critical("Firebase Admin SDK initialization failed. Aborting script.")
+        exit(1)
+
     # 1. Skip Oxford 102 Flower dataset download and preparation
     logging.info("DEBUG: Skipping Oxford data download and preparation as requested.")
 
-    # 2. Download uploaded user data
-    logging.info("DEBUG: Starting user data download.")
-    download_user_data()
+    # 2. Download uploaded user data (NEW FUNCTION CALL)
+    logging.info("DEBUG: Starting user data download from Firebase Storage.")
+    download_user_data_from_firebase() # CALL THE NEW FUNCTION
     logging.info("DEBUG: User data download complete.")
 
     # 3. Load base and user datasets
@@ -435,27 +528,43 @@ if __name__ == "__main__":
     trained_model = train_model(model, train_loader, val_loader, NUM_EPOCHS, criterion, optimizer)
     logging.info("DEBUG: Model training finished.")
 
-    # 5. Save TorchScript model and class mapping
-    logging.info("DEBUG: Saving model and mapping files.")
+    # 5. Save TorchScript model and class mapping locally, then upload to Firebase Storage
+    logging.info("DEBUG: Saving model and mapping files locally and uploading to Firebase.")
     try:
         save_model_and_mapping(trained_model, all_classes)
-        logging.info("DEBUG: Model and mapping files saved.")
+        logging.info("DEBUG: Model and mapping files saved and uploaded.")
     except Exception as e:
-        logging.critical(f"Failed to save model or class mapping: {e}. Aborting.")
+        logging.critical(f"Failed to save or upload model/class mapping: {e}. Aborting.")
         exit(1)
 
     # Clean up downloaded files
     logging.info("DEBUG: Starting cleanup of raw data.")
-    for f in ["102flowers.tgz", "imagelabels.mat", "setid.mat"]:
+    for f in ["102flowers.tgz", "imagelabels.mat", "setid.mat"]: # These are old files, likely not created now
         if os.path.exists(f):
             os.remove(f)
             logging.info(f"Cleaned up: {f}")
-    if os.path.exists("jpg"):
+    if os.path.exists("jpg"): # This is also an old directory, likely not created now
         shutil.rmtree("jpg")
         logging.info("Cleaned up: jpg directory.")
-    # No need to clean BASE_TRAINING_DATA_DIR as it's part of the repo
+    
+    # Clean up user_training_data directory downloaded from Firebase
     if os.path.exists(USER_DATA_DIR):
         shutil.rmtree(USER_DATA_DIR)
         logging.info(f"Cleaned up: {USER_DATA_DIR} directory.")
     
+    # Also clean up locally saved model and mapping files after upload if desired,
+    # or keep them for debugging if the action runner automatically cleans up anyway.
+    if os.path.exists(MODEL_OUTPUT):
+        os.remove(MODEL_OUTPUT)
+        logging.info(f"Cleaned up local {MODEL_OUTPUT}.")
+    if os.path.exists(CLASS_MAPPING_FILE):
+        os.remove(CLASS_MAPPING_FILE)
+        logging.info(f"Cleaned up local {CLASS_MAPPING_FILE}.")
+    if os.path.exists("best_model_weights.pth"): # Temp file created during training
+        os.remove("best_model_weights.pth")
+        logging.info("Cleaned up local best_model_weights.pth.")
+    if os.path.exists("model_version.txt"): # This file is also uploaded
+        os.remove("model_version.txt")
+        logging.info("Cleaned up local model_version.txt.")
+
     logging.info("Cleanup complete. Script finished successfully.")
