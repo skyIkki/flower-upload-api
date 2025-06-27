@@ -13,11 +13,12 @@ import requests
 import json
 import logging
 import random
-import PIL.Image
+import PIL.Image # Ensure PIL is imported for the UnifiedDataset
 
 # --- NEW IMPORTS FOR FIREBASE STORAGE ---
 import firebase_admin
 from firebase_admin import credentials, storage
+import base64 # <--- THIS IS THE NEW IMPORT
 # ----------------------------------------
 
 # --- DEBUGGING LINES AT THE VERY TOP ---
@@ -46,10 +47,12 @@ logging.info("DEBUG: Random seeds set.")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_OUTPUT = "best_flower_model_v3.pt"
 CLASS_MAPPING_FILE = "class_to_label.json"
+# REMOVED: DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data"
 USER_DATA_DIR = "user_training_data"
 BASE_TRAINING_DATA_DIR = "base_training_data"
 
 # NEW: Firebase Storage Bucket Name (CHECK THIS IN YOUR FIREBASE CONSOLE -> STORAGE)
+# It's usually something like 'your-project-id.appspot.com'
 FIREBASE_STORAGE_BUCKET = "flower-identification-c2ef6.appspot.com" # <--- VERIFY THIS IS YOUR ACTUAL BUCKET NAME
 
 # NEW: Path within Firebase Storage where user data is uploaded by the Android app
@@ -65,6 +68,7 @@ NUM_EPOCHS = 15
 VALIDATION_SPLIT_RATIO = 0.2 # 20% of combined data for validation
 
 # Oxford 102 Flowers dataset URLs (still not used for training data)
+# These are kept for context but are not actively used for data loading anymore
 FLOWER_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
 LABELS_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
 SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
@@ -121,15 +125,17 @@ def initialize_firebase_admin_sdk():
     logging.info("Initializing Firebase Admin SDK...")
     try:
         # Load credentials from the environment variable (GitHub Secret)
-        service_account_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY') # Get the Base64 string
+        service_account_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY') # <--- GET THE BASE64 STRING
         if service_account_base64 is None:
             logging.critical("FIREBASE_SERVICE_ACCOUNT_KEY environment variable not found. Cannot initialize Firebase.")
             raise ValueError("Firebase Service Account Key missing. Ensure it's set as a GitHub Secret.")
 
         # Decode the Base64 string back to JSON
+        # <--- THIS IS THE NEW LINE FOR DECODING
         service_account_json_decoded = base64.b64decode(service_account_base64).decode('utf-8')
         
         # Load the JSON string into a Python dictionary
+        # <--- USE THE DECODED STRING HERE
         cred = credentials.Certificate(json.loads(service_account_json_decoded))
         
         firebase_admin.initialize_app(cred, {
@@ -341,7 +347,7 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
     best_loss = float('inf') # Initialize best_loss to infinity
     best_model_path = "best_model_weights.pth" # Path to save the best model weights locally
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROOnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
     for epoch in range(num_epochs):
         model.train()
