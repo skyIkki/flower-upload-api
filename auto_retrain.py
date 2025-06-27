@@ -347,7 +347,7 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
     best_loss = float('inf') # Initialize best_loss to infinity
     best_model_path = "best_model_weights.pth" # Path to save the best model weights locally
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROOnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
     for epoch in range(num_epochs):
         model.train()
