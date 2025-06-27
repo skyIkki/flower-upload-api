@@ -13,11 +13,12 @@ import requests
 import json
 import logging
 import random
-import PIL.Image # Ensure PIL is imported for the UnifiedDataset
+import PIL.Image
 
 # --- NEW IMPORTS FOR FIREBASE STORAGE ---
 import firebase_admin
 from firebase_admin import credentials, storage
+import base64 # <-- ADD THIS IMPORT
 # ----------------------------------------
 
 # --- DEBUGGING LINES AT THE VERY TOP ---
@@ -46,12 +47,10 @@ logging.info("DEBUG: Random seeds set.")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_OUTPUT = "best_flower_model_v3.pt"
 CLASS_MAPPING_FILE = "class_to_label.json"
-# REMOVED: DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data"
 USER_DATA_DIR = "user_training_data"
 BASE_TRAINING_DATA_DIR = "base_training_data"
 
 # NEW: Firebase Storage Bucket Name (CHECK THIS IN YOUR FIREBASE CONSOLE -> STORAGE)
-# It's usually something like 'your-project-id.appspot.com'
 FIREBASE_STORAGE_BUCKET = "flower-identification-c2ef6.appspot.com" # <--- VERIFY THIS IS YOUR ACTUAL BUCKET NAME
 
 # NEW: Path within Firebase Storage where user data is uploaded by the Android app
@@ -67,7 +66,6 @@ NUM_EPOCHS = 15
 VALIDATION_SPLIT_RATIO = 0.2 # 20% of combined data for validation
 
 # Oxford 102 Flowers dataset URLs (still not used for training data)
-# These are kept for context but are not actively used for data loading anymore
 FLOWER_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
 LABELS_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
 SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
@@ -124,12 +122,16 @@ def initialize_firebase_admin_sdk():
     logging.info("Initializing Firebase Admin SDK...")
     try:
         # Load credentials from the environment variable (GitHub Secret)
-        service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY')
-        if service_account_json is None:
+        service_account_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY') # Get the Base64 string
+        if service_account_base64 is None:
             logging.critical("FIREBASE_SERVICE_ACCOUNT_KEY environment variable not found. Cannot initialize Firebase.")
             raise ValueError("Firebase Service Account Key missing. Ensure it's set as a GitHub Secret.")
 
-        cred = credentials.Certificate(json.loads(service_account_json))
+        # Decode the Base64 string back to JSON
+        service_account_json_decoded = base64.b64decode(service_account_base64).decode('utf-8')
+        
+        # Load the JSON string into a Python dictionary
+        cred = credentials.Certificate(json.loads(service_account_json_decoded))
         
         firebase_admin.initialize_app(cred, {
             'storageBucket': FIREBASE_STORAGE_BUCKET
@@ -138,9 +140,6 @@ def initialize_firebase_admin_sdk():
     except Exception as e:
         logging.error(f"Error initializing Firebase Admin SDK: {e}")
         raise
-
-# REMOVED: download_and_extract_oxford_data() - no longer needed
-# REMOVED: prepare_oxford_splits() - no longer needed
 
 def download_user_data_from_firebase():
     """Downloads user-uploaded training data from Firebase Storage."""
@@ -163,9 +162,6 @@ def download_user_data_from_firebase():
                 continue
             
             # Construct local file path (e.g., user_training_data/rose/image1.jpg)
-            # Remove the FIREBASE_USER_DATA_PREFIX to get the relative path
-            # Example: blob.name = "user_training_data/rose/image1.jpg"
-            #          relative_path = "rose/image1.jpg"
             relative_path = blob.name[len(FIREBASE_USER_DATA_PREFIX):]
             local_file_path = os.path.join(USER_DATA_DIR, relative_path)
             
@@ -462,14 +458,28 @@ def save_model_and_mapping(model, classes):
     # For initial setup, you might just create it.
     model_version_file = "model_version.txt"
     current_version = 0
-    if os.path.exists(model_version_file):
-        try:
-            with open(model_version_file, "r") as f:
-                current_version = int(f.read().strip())
-        except ValueError:
-            logging.warning(f"Could not read integer from {model_version_file}. Starting version at 0.")
-            current_version = 0
     
+    # NEW: Try to download model_version.txt from Firebase Storage first
+    try:
+        bucket = storage.bucket()
+        blob = bucket.blob(os.path.join(FIREBASE_MODEL_UPLOAD_PREFIX, model_version_file))
+        version_data = blob.download_as_text()
+        current_version = int(version_data.strip())
+        logging.info(f"Downloaded existing model_version.txt from Firebase: v{current_version}")
+    except Exception as e:
+        logging.warning(f"Could not download model_version.txt from Firebase or parse it: {e}. Starting version at 0 (or continuing from local if it exists).")
+        # Fallback to local file if Firebase download failed or was not found
+        if os.path.exists(model_version_file):
+            try:
+                with open(model_version_file, "r") as f:
+                    current_version = int(f.read().strip())
+                logging.info(f"Read local model_version.txt: v{current_version}")
+            except ValueError:
+                logging.warning(f"Could not read integer from local {model_version_file}. Starting version at 0.")
+                current_version = 0
+        else:
+            current_version = 0 # Default to 0 if neither local nor remote found
+
     new_version = current_version + 1
     with open(model_version_file, "w") as f:
         f.write(str(new_version))
