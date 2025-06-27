@@ -12,9 +12,10 @@ from torch.utils.data import DataLoader, ConcatDataset, random_split
 import requests
 import json
 import logging
-import random # Correctly imported and used for reproducibility
+import random
+import PIL.Image # Ensure PIL is imported for the UnifiedDataset
 
-# --- DEBUGGING LINES AT THE VERY TOP (KEEP THESE FOR THE NEXT RUN) ---
+# --- DEBUGGING LINES AT THE VERY TOP ---
 print("DEBUG: auto_retrain.py script execution started.")
 print(f"DEBUG: Current working directory: {os.getcwd()}")
 # -------------------------------------------------------------------
@@ -30,8 +31,7 @@ def set_all_seeds(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     random.seed(seed)
-    # np.random.seed(seed) # Uncomment if you use numpy and want to seed it too
-set_all_seeds(42) # You can choose any integer seed
+set_all_seeds(42)
 
 logging.info("DEBUG: Random seeds set.")
 
@@ -41,13 +41,12 @@ logging.info("DEBUG: Random seeds set.")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_OUTPUT = "best_flower_model_v3.pt"
 CLASS_MAPPING_FILE = "class_to_label.json"
-DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data"
-BASE_DIR = "flowers"
-OXFORD_TRAIN_DIR = os.path.join(BASE_DIR, "train")
-OXFORD_VAL_DIR = os.path.join(BASE_DIR, "val")
+DOWNLOAD_URL = "https://flower-upload-api.onrender.com/download-data" # Your API endpoint for user data
 USER_DATA_DIR = "user_training_data"
+# NEW: Path to your local base training data within the repository
+BASE_TRAINING_DATA_DIR = "base_training_data"
 
-# Oxford 102 Flowers dataset URLs
+# Oxford 102 Flowers dataset URLs (still not used for training data)
 FLOWER_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
 LABELS_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
 SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
@@ -56,11 +55,9 @@ SETID_URL = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
 BATCH_SIZE = 32
 LEARNING_RATE = 0.001
 NUM_EPOCHS = 15
-VALIDATION_SPLIT_RATIO = 0.2 # 20% of merged data for validation
+VALIDATION_SPLIT_RATIO = 0.2 # 20% of combined data for validation
 
-# ---------------------------
-# OXFORD CODE TO COMMON NAME MAPPING (Re-added)
-# ---------------------------
+# Oxford mapping (still not used for training data classes) - kept for completeness but not actively used for training class names
 OXFORD_CODE_TO_NAME_MAP = {
     "001": "pink primrose", "002": "globe thistle", "003": "blanket flower", "004": "trumpet creeper",
     "005": "blackberry lily", "006": "snapdragon", "007": "colt's foot", "008": "king protea",
@@ -90,9 +87,7 @@ OXFORD_CODE_TO_NAME_MAP = {
     "099": "camellia", "100": "mallow", "101": "mexican petunia", "102": "bromelia"
 }
 
-# ---------------------------
-# TRANSFORMS
-# ---------------------------
+# --- TRANSFORMS ---
 train_transform = transforms.Compose([
     transforms.RandomResizedCrop(224),
     transforms.RandomHorizontalFlip(),
@@ -107,124 +102,151 @@ val_transform = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-# ---------------------------
-# HELPER FUNCTIONS
-# ---------------------------
-
+# --- HELPER FUNCTIONS ---
 def download_and_extract_oxford_data():
-    """Downloads and extracts the Oxford 102 Flowers dataset."""
-    logging.info("⬇️ Downloading and preparing Oxford 102 Flowers dataset...")
-
-    try:
-        urllib.request.urlretrieve(FLOWER_URL, "102flowers.tgz")
-        urllib.request.urlretrieve(LABELS_URL, "imagelabels.mat")
-        urllib.request.urlretrieve(SETID_URL, "setid.mat")
-    except urllib.error.URLError as e:
-        logging.error(f"❌ Failed to download Oxford data: {e}")
-        raise
-
-    try:
-        with tarfile.open("102flowers.tgz") as tar:
-            tar.extractall()
-    except tarfile.ReadError as e:
-        logging.error(f"❌ Failed to extract 102flowers.tgz: {e}")
-        raise
-
-    logging.info("✅ Oxford 102 Flowers dataset downloaded and extracted.")
+    logging.info("⬇️ Downloading and preparing Oxford 102 Flowers dataset (SKIPPED in main workflow).")
+    # This function is retained for completeness but is not called in main
+    # as we no longer want to train on Oxford data.
+    pass # Implementation removed/skipped
 
 def prepare_oxford_splits(labels, train_ids, val_ids, image_dir="jpg"):
-    """Organizes Oxford dataset into train and validation directories."""
-    def _prepare_split_dir(image_ids, target_dir):
-        os.makedirs(target_dir, exist_ok=True)
-        for i in image_ids:
-            # Labels are 1-indexed in .mat file, convert to 0-indexed for folder names
-            # and format to "001", "002" etc.
-            label_code = f"{labels[i - 1]:03d}"
-            label_dir = os.path.join(target_dir, label_code)
-            os.makedirs(label_dir, exist_ok=True)
-            src = os.path.join(image_dir, f"image_{i:05d}.jpg")
-            dst = os.path.join(label_dir, f"image_{i:05d}.jpg")
-            if os.path.exists(src):
-                shutil.copy(src, dst)
-            else:
-                logging.warning(f"Image not found: {src}")
-
-    logging.info("Preparing Oxford 102 Flowers dataset splits...")
-    _prepare_split_dir(train_ids, OXFORD_TRAIN_DIR)
-    _prepare_split_dir(val_ids, OXFORD_VAL_DIR)
-    logging.info("✅ Oxford 102 Flowers dataset prepared for training and validation.")
-
+    logging.info("Preparing Oxford 102 Flowers dataset splits (SKIPPED in main workflow).")
+    # This function is retained for completeness but is not called in main.
+    pass # Implementation removed/skipped
 
 def download_user_data():
-    """Downloads and extracts user-uploaded training data."""
+    """Downloads and extracts user-uploaded training data from the API."""
     logging.info("📦 Checking for uploaded training data...")
+    # Ensure the directory exists, even if no data is downloaded
     os.makedirs(USER_DATA_DIR, exist_ok=True)
 
     try:
-        response = requests.get(DOWNLOAD_URL, timeout=30) # Increased timeout
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        response = requests.get(DOWNLOAD_URL, timeout=60) # Increased timeout
+        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
 
-        # Check if the content is actually a ZIP file
+        # Check if the response actually contains a ZIP file
         if not response.headers.get('Content-Type') == 'application/zip':
-            logging.warning("Received non-ZIP content from download URL. Skipping user data extraction.")
+            logging.info("Received non-ZIP content from download URL. This might mean no user data is available or the API has no data to return. Skipping user data extraction.")
             return
 
+        # If a ZIP is received, proceed to extract
         with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
             zip_ref.extractall(USER_DATA_DIR)
 
-        if os.listdir(USER_DATA_DIR):
-            if any(os.path.isdir(os.path.join(USER_DATA_DIR, d)) for d in os.listdir(USER_DATA_DIR)):
-                logging.info(f"✅ Found user-uploaded data in {len(os.listdir(USER_DATA_DIR))} folders.")
-            else:
-                logging.warning("ℹ️ Uploaded data extracted but no subdirectories found. Ensure it's class-wise organized.")
+        # Basic check to see if extraction yielded any directories (classes)
+        extracted_dirs = [d for d in os.listdir(USER_DATA_DIR) if os.path.isdir(os.path.join(USER_DATA_DIR, d))]
+        if extracted_dirs:
+            logging.info(f"✅ Found user-uploaded data in {len(extracted_dirs)} class folders.")
         else:
-            logging.info("ℹ️ No images found in uploaded data or zip was empty.")
+            logging.info("ℹ️ Downloaded ZIP, but no class subdirectories found inside it. User data may be empty.")
 
+    except requests.exceptions.Timeout:
+        logging.warning("❌ Request to download user data timed out.")
+    except requests.exceptions.ConnectionError:
+        logging.warning("❌ Connection error when trying to download user data. API might be down or unreachable.")
     except requests.exceptions.RequestException as e:
         logging.warning(f"❌ Failed to download uploaded data (network/HTTP error): {e}")
     except zipfile.BadZipFile:
-        logging.warning("❌ Downloaded file is not a valid ZIP archive.")
+        logging.warning("❌ Downloaded file is not a valid ZIP archive (possibly empty or corrupted).")
     except Exception as e:
         logging.warning(f"❌ An unexpected error occurred during user data download: {e}")
 
+class UnifiedDataset(torch.utils.data.Dataset):
+    """
+    A custom dataset class to combine samples from different ImageFolder datasets
+    and map them to a unified set of class indices.
+    """
+    def __init__(self, samples_with_original_class_strings, unified_class_string_to_idx, transform=None):
+        self.samples = []
+        for path, original_class_string in samples_with_original_class_strings:
+            unified_idx = unified_class_string_to_idx.get(original_class_string)
+            if unified_idx is not None:
+                self.samples.append((path, unified_idx))
+            else:
+                logging.warning(f"Class '{original_class_string}' for image '{path}' not found in unified mapping. Skipping image.")
+        
+        self.transform = transform
+        # The classes for this dataset are the sorted list of unique common names
+        self.classes = sorted(list(unified_class_string_to_idx.keys()))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, target_idx = self.samples[idx]
+        image = PIL.Image.open(path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+        return image, target_idx
+
 def get_merged_datasets():
     """
-    Loads and merges Oxford and user-uploaded datasets.
-    Maps Oxford's numeric folder names (e.g., "001") to common names.
-    Ensures unified class mapping across all datasets.
-    
-    MODIFIED: This version will *exclude* Oxford classes from the final class mapping
-    and from the training/validation datasets that use these specific class labels.
+    Loads a base dataset (always present in repo) and merges with user-uploaded datasets.
+    The final class mapping and the trained model will reflect all classes from
+    both the base data and user data.
     """
-    logging.info("📂 Loading datasets...")
+    logging.info("📂 Loading base and user datasets...")
 
-    # Load Oxford datasets for structural parsing, but their classes won't be mapped
-    oxford_train_dataset = datasets.ImageFolder(OXFORD_TRAIN_DIR, transform=train_transform)
-    oxford_val_dataset = datasets.ImageFolder(OXFORD_VAL_DIR, transform=val_transform)
-
-    # Initialize combined unique classes *only* with user-provided common names
     all_unique_common_names = set()
+    all_raw_samples = [] # To store (image_path, class_string) tuples from all sources
 
+    # --- Load Base Dataset ---
+    base_dataset = None
+    if os.path.exists(BASE_TRAINING_DATA_DIR) and os.listdir(BASE_TRAINING_DATA_DIR):
+        try:
+            # Use a temporary transform that only reads the image without normalization
+            # The actual transform will be applied later in UnifiedDataset
+            temp_transform = transforms.Compose([
+                transforms.Resize((224, 224)), # Resize for consistency
+                transforms.ToTensor() # Just to load it, not for normalization yet
+            ])
+            
+            base_dataset = datasets.ImageFolder(BASE_TRAINING_DATA_DIR, transform=temp_transform)
+            if base_dataset and len(base_dataset) > 0:
+                logging.info(f"Loaded {len(base_dataset)} images from base data with {len(base_dataset.classes)} classes.")
+                for path, original_idx in base_dataset.samples:
+                    class_string = base_dataset.classes[original_idx]
+                    all_raw_samples.append((path, class_string))
+                    all_unique_common_names.add(class_string)
+            else:
+                logging.warning("Base dataset directory found, but it appears empty or could not load any images.")
+                base_dataset = None
+        except Exception as e:
+            logging.warning(f"Could not load base dataset from '{BASE_TRAINING_DATA_DIR}': {e}. Ensure folder structure is correct (base_training_data/class_name/image.jpg).")
+            base_dataset = None
+    else:
+        logging.warning(f"Base dataset directory '{BASE_TRAINING_DATA_DIR}' not found or is empty. Proceeding without it, but this is the initial data source.")
+
+    # --- Load User Dataset ---
     user_dataset = None
     if os.path.exists(USER_DATA_DIR) and os.listdir(USER_DATA_DIR):
         try:
-            user_dataset = datasets.ImageFolder(USER_DATA_DIR, transform=train_transform)
+            temp_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor()
+            ])
+            user_dataset = datasets.ImageFolder(USER_DATA_DIR, transform=temp_transform)
             if user_dataset and len(user_dataset) > 0:
-                logging.info(f"Adding {len(user_dataset)} images from user-uploaded data with {len(user_dataset.classes)} classes.")
-                # Add user-provided class names directly to the set of unique common names
-                all_unique_common_names.update(user_dataset.classes)
+                logging.info(f"Loaded {len(user_dataset)} images from user-uploaded data with {len(user_dataset.classes)} classes.")
+                for path, original_idx in user_dataset.samples:
+                    class_string = user_dataset.classes[original_idx]
+                    all_raw_samples.append((path, class_string))
+                    all_unique_common_names.add(class_string)
             else:
                 logging.info("User dataset directory found, but it appears empty or could not load any images.")
                 user_dataset = None
         except Exception as e:
-            logging.warning(f"Could not load user dataset from '{USER_DATA_DIR}': {e}. Proceeding without it.")
+            logging.warning(f"Could not load user dataset from '{USER_DATA_DIR}': {e}. Ensure folder structure is correct (user_training_data/class_name/image.jpg).")
             user_dataset = None
+    else:
+        logging.info(f"User dataset directory '{USER_DATA_DIR}' not found or is empty. Proceeding without it.")
 
-    if not all_unique_common_names:
-        logging.critical("No user-uploaded classes found. Cannot train a model without any classes.")
-        raise ValueError("No user-uploaded classes available for training.")
+    # --- Finalize Combined Dataset ---
+    if not all_raw_samples: # Check if there's any data at all
+        logging.critical("No base or user-uploaded classes/images found for training. Aborting.")
+        raise ValueError("No data available for training. Ensure 'base_training_data' has images.")
 
-    logging.info(f"✅ Total unique common names for training (user-only): {len(all_unique_common_names)}")
+    logging.info(f"✅ Total unique common names for training: {len(all_unique_common_names)}")
 
     # Sort the unique common names alphabetically to ensure consistent indexing
     final_sorted_common_names = sorted(list(all_unique_common_names))
@@ -232,98 +254,45 @@ def get_merged_datasets():
     # Create a mapping from common name strings to new unified indices (0, 1, 2...)
     class_string_to_unified_idx = {name: i for i, name in enumerate(final_sorted_common_names)}
 
-    def remap_targets(dataset, is_oxford):
-        remapped_samples = []
-        for img_path, original_idx in dataset.samples:
-            original_class_string = dataset.classes[original_idx]
-            
-            common_name = original_class_string # For user data, it's already common name
-            if is_oxford:
-                # For Oxford data, convert code to common name, but this common name
-                # might not be in our final mapping (which is user-only)
-                common_name = OXFORD_CODE_TO_NAME_MAP.get(original_class_string, original_class_string)
-            
-            unified_idx = class_string_to_unified_idx.get(common_name)
-            
-            if unified_idx is None:
-                # This image's class is not in our final set of classes (user-only)
-                logging.debug(f"Skipping image '{img_path}' with class '{common_name}' as it's not in the final user-defined class set.")
-                continue # Skip images with unmapped classes (i.e., Oxford classes)
-            
-            remapped_samples.append((img_path, unified_idx))
+    # Create the unified dataset with the correct transforms
+    full_unified_dataset = UnifiedDataset(
+        samples_with_original_class_strings=all_raw_samples,
+        unified_class_string_to_idx=class_string_to_unified_idx,
+        transform=train_transform # Apply the full training transform here
+    )
 
-        # Update the dataset's internal samples, classes, and class_to_idx
-        dataset.samples = remapped_samples
-        dataset.classes = final_sorted_common_names # Now only user-defined common names
-        dataset.class_to_idx = class_string_to_unified_idx # Now only user-defined common names
-
-    logging.info("Remapping dataset labels to unified common name indices (user-only)...")
+    # Validation split from the combined dataset
+    train_size = int((1 - VALIDATION_SPLIT_RATIO) * len(full_unified_dataset))
+    val_size = len(full_unified_dataset) - train_size
     
-    # Remap user_dataset if it exists
-    if user_dataset is not None:
-        remap_targets(user_dataset, is_oxford=False)
+    # Handle very small datasets for train/val split
+    if len(full_unified_dataset) < 2: # Need at least 2 images for a meaningful split
+        logging.warning("Combined dataset has fewer than 2 images. Will use all for training, validation set will be empty.")
+        train_size = len(full_unified_dataset)
+        val_size = 0
+    elif train_size == 0: # Ensure train_size is at least 1 if full_unified_dataset > 0
+        train_size = 1
+        val_size = len(full_unified_dataset) - train_size
+        logging.warning("Training set would be 0, adjusted to 1 image. Validation set will be smaller.")
     
-    # Remap Oxford datasets (this will effectively filter them out if their classes
-    # are not present in `class_string_to_unified_idx`)
-    remap_targets(oxford_train_dataset, is_oxford=True)
-    remap_targets(oxford_val_dataset, is_oxford=True)
-    
-    logging.info("Dataset label remapping complete.")
-
-    # The training source should now ONLY be the (filtered) user_dataset
-    final_train_source_dataset = user_dataset # This is the main training data
-
-    # Validation split comes ONLY from user_dataset as well,
-    # and the oxford_val_dataset will be effectively empty for training purposes
-    # if its classes are not in the user-defined set.
-    
-    train_size = int((1 - VALIDATION_SPLIT_RATIO) * len(final_train_source_dataset)) if final_train_source_dataset else 0
-    val_size = len(final_train_source_dataset) - train_size if final_train_source_dataset else 0
-    
-    if final_train_source_dataset is None or len(final_train_source_dataset) == 0:
-        logging.critical("No valid user training data after remapping. Cannot create loaders.")
-        raise ValueError("No user data for training after filtering.")
-
-    if train_size == 0 or val_size == 0:
-        logging.warning("User dataset too small for a meaningful train/validation split. Adjusting sizes.")
-        if len(final_train_source_dataset) > 1:
-            train_size = max(1, len(final_train_source_dataset) - 1)
-            val_size = len(final_train_source_dataset) - train_size
-        else:
-            train_size = len(final_train_source_dataset)
-            val_size = 0
-            logging.warning("Very small user dataset, validation set will be empty or minimal.")
-
-    train_subset, val_subset = random_split(final_train_source_dataset, [train_size, val_size])
-
-    # The final validation dataset will now implicitly only contain user data
-    # because the oxford_val_dataset will have no samples after remapping
-    # if its classes aren't in the user-defined set.
-    # We still concatenate it here, but it won't add anything if filtered out.
-    final_val_dataset_combined = ConcatDataset([val_subset, oxford_val_dataset]) # oxford_val_dataset will be empty if its classes are not in user_data
+    train_subset, val_subset = random_split(full_unified_dataset, [train_size, val_size])
 
     final_train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() // 2 or 1)
-    final_val_loader = DataLoader(final_val_dataset_combined, batch_size=BATCH_SIZE, shuffle=False, num_workers=os.cpu_count() // 2 or 1)
+    # Only create val_loader if val_subset is not empty
+    final_val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE, shuffle=False, num_workers=os.cpu_count() // 2 or 1) if len(val_subset) > 0 else []
 
-    logging.info(f"Training loader size: {len(train_subset)} images, Validation loader size: {len(final_val_dataset_combined)} images.")
+    logging.info(f"Training loader size: {len(train_subset)} images, Validation loader size: {len(val_subset)} images.")
     return final_train_loader, final_val_loader, final_sorted_common_names, len(final_sorted_common_names)
 
 
-# The rest of the script (main execution, build_model, train_model, save_model_and_mapping, cleanup)
-# remains the same as it correctly uses the outputs of get_merged_datasets.
-
-
+# --- Rest of auto_retrain.py (build_model, train_model, save_model_and_mapping) ---
 def build_model(num_classes):
     """Builds and initializes the ResNet model."""
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-    # Freeze all layers first
     for param in model.parameters():
         param.requires_grad = False
-
-    # Replace the final fully connected layer
     num_ftrs = model.fc.in_features
-    model.fc = nn.Linear(num_ftrs, num_classes) # Only this layer will be trained by default
-
+    model.fc = nn.Linear(num_ftrs, num_classes)
     model.to(DEVICE)
     logging.info(f"Model built with {num_classes} output classes.")
     return model
@@ -331,10 +300,9 @@ def build_model(num_classes):
 def train_model(model, train_loader, val_loader, num_epochs, criterion, optimizer):
     """Trains the model."""
     logging.info("📚 Starting model training...")
-    best_loss = float('inf')
+    best_loss = float('inf') # Initialize best_loss to infinity
+    best_model_path = "best_model_weights.pth" # Path to save the best model weights
 
-    # Learning rate scheduler
-    # scheduler = torch.optim.lr_scheduler.ReduceLOnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True) # verbose=True added
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
     for epoch in range(num_epochs):
@@ -356,7 +324,7 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
             total_train += labels.size(0)
             correct_train += (predicted == labels).sum().item()
 
-            if batch_idx % 10 == 0: # Log every 10 batches
+            if batch_idx % 10 == 0:
                 logging.debug(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}/{len(train_loader)}, Train Loss: {loss.item():.4f}")
 
         avg_train_loss = total_train_loss / len(train_loader)
@@ -369,97 +337,91 @@ def train_model(model, train_loader, val_loader, num_epochs, criterion, optimize
         correct_val = 0
         total_val = 0
         with torch.no_grad():
-            for images, labels in val_loader:
-                images, labels = images.to(DEVICE), labels.to(DEVICE)
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                total_val_loss += loss.item()
+            # Check if val_loader has data before iterating
+            if val_loader and len(val_loader) > 0:
+                for images, labels in val_loader:
+                    images, labels = images.to(DEVICE), labels.to(DEVICE)
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+                    total_val_loss += loss.item()
 
-                _, predicted = torch.max(outputs.data, 1)
-                total_val += labels.size(0)
-                correct_val += (predicted == labels).sum().item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    total_val += labels.size(0)
+                    correct_val += (predicted == labels).sum().item()
+            else:
+                logging.info("Validation loader is empty. Skipping validation step for this epoch.")
 
-        if len(val_loader) > 0: # Avoid division by zero if val_loader is empty
+        if val_loader and total_val > 0: # Only calculate and log validation metrics if there was data
             avg_val_loss = total_val_loss / len(val_loader)
             val_accuracy = 100 * correct_val / total_val
             logging.info(f"Epoch {epoch+1} Val Loss: {avg_val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%")
 
-            # Step the scheduler
             scheduler.step(avg_val_loss)
 
-            # Save the best model based on validation loss
             if avg_val_loss < best_loss:
                 best_loss = avg_val_loss
-                torch.save(model.state_dict(), "best_model_weights.pth") # Save only weights
+                torch.save(model.state_dict(), best_model_path) # Save to the defined path
                 logging.info(f"Saving best model weights with validation loss: {best_loss:.4f}")
         else:
-            logging.warning("Validation loader is empty. Skipping validation step for this epoch.")
-            # If no validation data, just save after each epoch or define a different saving strategy
-            torch.save(model.state_dict(), "best_model_weights.pth")
-            logging.info("No validation data, saving model weights after epoch.")
+            logging.info("No meaningful validation performed. Saving model weights after epoch.")
+            # If no validation data, always save the model state after each epoch
+            torch.save(model.state_dict(), best_model_path)
+
 
     logging.info("✅ Training complete.")
-    # Load the best weights if a best_model_weights.pth was saved
-    if os.path.exists("best_model_weights.pth"):
-        model.load_state_dict(torch.load("best_model_weights.pth"))
+    # Load the best weights if they were saved
+    if os.path.exists(best_model_path):
+        model.load_state_dict(torch.load(best_model_path))
         logging.info("Loaded best model weights for final saving.")
+    else:
+        logging.warning("No 'best_model_weights.pth' found. Using the last epoch's model.")
     return model
 
 def save_model_and_mapping(model, classes):
     """Saves the TorchScript model and class-to-label mapping."""
-    model.eval() # Set to eval mode before scripting
+    model.eval()
 
-    scripted_model = torch.jit.script(model)
+    # Ensure the model is on CPU for scripting if it was on GPU during training,
+    # as scripted models are typically deployed to CPU environments.
+    model_on_cpu = model.to('cpu')
+    scripted_model = torch.jit.script(model_on_cpu)
     scripted_model.save(MODEL_OUTPUT)
     logging.info(f"✅ Saved TorchScript model as {MODEL_OUTPUT}")
 
-    # Create and save class-to-label mapping
-    # 'classes' should now be the list of sorted common names (e.g., ['apple', 'rose', 'tulip'])
     idx_to_label = {i: label for i, label in enumerate(classes)}
     with open(CLASS_MAPPING_FILE, "w") as f:
         json.dump(idx_to_label, f, indent=4)
     logging.info(f"✅ Saved class-to-label mapping to {CLASS_MAPPING_FILE}")
 
-# ---------------------------
-# MAIN EXECUTION
-# ---------------------------
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     logging.info("DEBUG: Entering main execution block of auto_retrain.py.")
 
-    # 1. Download and prepare Oxford 102 Flower dataset
-    # (Keeping this step to ensure 'jpg' and 'flowers' directories are set up,
-    # but their content won't be used for class mapping or training.)
-    try:
-        logging.info("DEBUG: Attempting to download and prepare Oxford data.")
-        download_and_extract_oxford_data()
-        labels = scipy.io.loadmat("imagelabels.mat")["labels"][0]
-        setid = scipy.io.loadmat("setid.mat")
-        train_ids = setid["trnid"][0]
-        val_ids = setid["valid"][0]
-        prepare_oxford_splits(labels, train_ids, val_ids)
-        logging.info("DEBUG: Oxford data preparation finished.")
-    except Exception as e:
-        logging.critical(f"Aborting due to Oxford dataset preparation failure: {e}")
-        exit(1) # Exit immediately on critical data setup failure
+    # 1. Skip Oxford 102 Flower dataset download and preparation
+    logging.info("DEBUG: Skipping Oxford data download and preparation as requested.")
 
-    # 2. Download uploaded user data (if available)
+    # 2. Download uploaded user data
     logging.info("DEBUG: Starting user data download.")
     download_user_data()
     logging.info("DEBUG: User data download complete.")
 
-    # 3. Load and merge datasets
-    logging.info("DEBUG: Getting merged datasets.")
+    # 3. Load base and user datasets
+    logging.info("DEBUG: Getting merged datasets (base + user).")
     try:
         train_loader, val_loader, all_classes, num_classes = get_merged_datasets()
         logging.info(f"DEBUG: Merged datasets loaded. Number of unique classes: {num_classes}")
+        
         if num_classes == 0:
-            logging.critical("No classes found after merging datasets. Cannot train a model.")
+            logging.critical("No classes found in base or user data. Cannot train a model.")
             exit(1)
         if len(train_loader.dataset) == 0:
-            logging.critical("Training dataset is empty. Cannot train a model.")
+            logging.critical("Training dataset (base + user data) is empty. Cannot train a model.")
             exit(1)
-    except Exception as e:
-        logging.critical(f"Failed to load or merge datasets: {e}. Aborting.")
+    except ValueError as ve: # Catch the specific error from get_merged_datasets
+        logging.critical(f"Failed to load datasets: {ve}. Aborting.")
+        exit(1)
+    except Exception as e: # Catch any other unexpected errors
+        logging.critical(f"An unexpected error occurred while preparing datasets: {e}. Aborting.")
         exit(1)
 
 
@@ -469,8 +431,7 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # Train the model
-    logging.info("DEBUG: Starting model training.")
+    logging.info("DEBUG: Starting model training on base + user data.")
     trained_model = train_model(model, train_loader, val_loader, NUM_EPOCHS, criterion, optimizer)
     logging.info("DEBUG: Model training finished.")
 
@@ -481,7 +442,7 @@ if __name__ == "__main__":
         logging.info("DEBUG: Model and mapping files saved.")
     except Exception as e:
         logging.critical(f"Failed to save model or class mapping: {e}. Aborting.")
-        exit(1) # Exit if saving fails
+        exit(1)
 
     # Clean up downloaded files
     logging.info("DEBUG: Starting cleanup of raw data.")
@@ -492,10 +453,9 @@ if __name__ == "__main__":
     if os.path.exists("jpg"):
         shutil.rmtree("jpg")
         logging.info("Cleaned up: jpg directory.")
-    if os.path.exists(BASE_DIR):
-        shutil.rmtree(BASE_DIR)
-        logging.info(f"Cleaned up: {BASE_DIR} directory.")
+    # No need to clean BASE_TRAINING_DATA_DIR as it's part of the repo
     if os.path.exists(USER_DATA_DIR):
         shutil.rmtree(USER_DATA_DIR)
         logging.info(f"Cleaned up: {USER_DATA_DIR} directory.")
+    
     logging.info("Cleanup complete. Script finished successfully.")
