@@ -18,7 +18,6 @@ import PIL.Image
 # --- NEW IMPORTS FOR FIREBASE STORAGE ---
 import firebase_admin
 from firebase_admin import credentials, storage
-import base64 # <-- ADD THIS IMPORT
 # ----------------------------------------
 
 # --- DEBUGGING LINES AT THE VERY TOP ---
