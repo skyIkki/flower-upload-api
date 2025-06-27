@@ -1,12 +1,21 @@
 name: 🌸 Retrain Flower Model (CI/CD)
 
 on:
+  push:
+    branches:
+      - main # Or your main branch
+    paths:
+      - 'auto_retrain.py' # Trigger if the script itself changes
+      - 'base_training_data/**' # Trigger if base data changes (e.g., you add more base images)
+      - 'requirements.txt' # Trigger if dependencies change
+  schedule:
+    - cron: '0 0 * * *' # Run once a day at midnight UTC (adjust as needed)
   workflow_dispatch: # Allows manual triggering from the GitHub Actions UI
 
 jobs:
-  train_and_deploy_model: # Renamed for clearer purpose
+  train_and_deploy_model:
     runs-on: ubuntu-latest
-    environment: production # Use an environment for better secrets management and deployment tracking
+    environment: production # Good practice for managing secrets and deployments
 
     steps:
       - name: 📥 Checkout Repository
@@ -19,98 +28,54 @@ jobs:
           cache: 'pip' # Cache pip dependencies for faster installs
 
       - name: 📦 Install Python Dependencies
-        run: pip install -r requirements.txt # Assuming requirements.txt is kept up-to-date
+        run: |
+          pip install -r requirements.txt
+          # Ensure firebase-admin and google-cloud-storage are in requirements.txt
+          # Also Pillow for PIL.Image if not already there.
+          # Example if you didn't put them in requirements.txt (but you should!):
+          # pip install firebase-admin google-cloud-storage Pillow
 
       - name: 🧠 Run Model Training Script
-        id: run_training # Add an ID to reference outputs if needed later
-        run: python auto_retrain.py
-        # You might want to add outputs from your Python script here,
-        # e.g., if it returns the path to the model or its performance metrics.
-
-      - name: ⬇️ Download Current Model Version (from Firebase)
-        id: download_version # Add an ID for better referencing
         env:
-          # Use explicit 'secrets.FIREBASE_SERVICE_ACCOUNT_KEY' or similar if you have a service account for better auth
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }} # Ensure this token has read permissions
-          FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
+          # Pass the Firebase Service Account Key as an environment variable
+          # This is CRITICAL for auto_retrain.py to authenticate with Firebase.
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
         run: |
-          # Attempt to download the current version. If it fails (e.g., file doesn't exist),
-          # default to 'v0'. Using a variable for the output file for consistency.
-          VERSION_FILE="model_version.txt"
-          curl -sS -X GET -L \
-            -H "Authorization: Bearer $FIREBASE_TOKEN" \
-            "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o/${VERSION_FILE}?alt=media" \
-            -o "${VERSION_FILE}" || echo "v0" > "${VERSION_FILE}"
+          python auto_retrain.py
+          # The Python script will now:
+          # 1. Download user_training_data from Firebase Storage.
+          # 2. Train the model (combining with base_training_data).
+          # 3. Upload best_flower_model_v3.pt, class_to_label.json, and model_version.txt to Firebase Storage.
+          # So, no separate download/upload steps are needed for these assets.
+        
+      # REMOVED: The '⬇️ Download Current Model Version (from Firebase)' step
+      #         because auto_retrain.py now handles reading/incrementing the version directly from Firebase.
 
-          # Ensure the file exists for subsequent steps, even if curl failed
-          if [ ! -f "${VERSION_FILE}" ]; then
-              echo "v0" > "${VERSION_FILE}"
-              echo "::warning ::model_version.txt was not downloaded, defaulting to v0."
-          fi
-          echo "Current model version: $(cat ${VERSION_FILE})"
+      # REMOVED: The '⬆️ Increment Model Version' step
+      #         because auto_retrain.py handles the version increment and upload.
 
-      - name: ⬆️ Increment Model Version
-        id: increment_version # Add an ID for potential output
+      # REMOVED: The '🚀 Upload Assets to Firebase Storage' step
+      #         because auto_retrain.py now directly uploads the trained model,
+      #         class map, and new version to Firebase Storage.
+
+      - name: 🧹 Clean up (Optional but Good Practice)
         run: |
-          VERSION_FILE="model_version.txt"
-          OLD_VERSION=$(cat "$VERSION_FILE")
-          # Extract only digits, handle potential 'v' prefix
-          OLD_NUMBER=$(echo "$OLD_VERSION" | sed 's/[^0-9]*//g')
-          NEW_NUMBER=$((OLD_NUMBER + 1))
-          NEW_VERSION="v$NEW_NUMBER"
-          echo "$NEW_VERSION" > "$VERSION_FILE"
-          echo "✅ New model version: $NEW_VERSION"
-          # Make the new version available to subsequent steps
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      - name: 🚀 Upload Assets to Firebase Storage
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }} # Ensure this token has write permissions
-          FIREBASE_BUCKET: flower-identification-c2ef6.firebasestorage.app
-          # Get the new version from the previous step's output
-          MODEL_VERSION: ${{ steps.increment_version.outputs.new_version }}
-        run: |
-          echo "Starting upload of model assets to Firebase Storage..."
-
-          # Define files to upload and their target names in storage
-          declare -A files_to_upload
-          files_to_upload["best_flower_model_v3.pt"]="best_flower_model_v3.pt"
-          files_to_upload["model_version.txt"]="model_version.txt"
-          files_to_upload["class_to_label.json"]="class_to_label.json"
-
-          for local_path in "${!files_to_upload[@]}"; do
-            storage_path="${files_to_upload[$local_path]}"
-            echo "Uploading $local_path to $storage_path..."
-
-            if [ -f "$local_path" ]; then
-              curl -sS -X POST -H "Authorization: Bearer $FIREBASE_TOKEN" \
-                -F "file=@$local_path" \
-                "https://firebasestorage.googleapis.com/v0/b/${FIREBASE_BUCKET}/o?name=$storage_path" \
-                && echo "✅ Successfully uploaded $local_path" \
-                || { echo "❌ Failed to upload $local_path"; exit 1; }
-            else
-              # Fail the workflow if a required file is missing (e.g., the model or class map)
-              if [[ "$local_path" == "best_flower_model_v3.pt" || "$local_path" == "class_to_label.json" ]]; then
-                echo "❌ Error: Required file '$local_path' not found. Aborting upload."
-                exit 1
-              else
-                echo "⚠️ Warning: Optional file '$local_path' not found. Skipping upload."
-              fi
-            fi
-          done
-
-          echo "All specified assets upload process completed."
-
-      # Optional: Add a step to notify on success/failure (e.g., Slack, Teams, email)
+          # Remove any large local files created during training/downloading
+          rm -rf user_training_data/
+          rm -f best_flower_model_v3.pt
+          rm -f class_to_label.json
+          rm -f model_version.txt
+          rm -f best_model_weights.pth
+        
       - name: 🔔 Notify on Completion
         if: always() # Run this step regardless of success or failure
         run: |
           if [ "${{ job.status }}" == "success" ]; then
-            echo "✨ Model retraining and deployment successful!"
+            echo "✨ Model retraining and deployment successful via Python script!"
           else
-            echo "🚨 Model retraining and deployment failed!"
+            echo "🚨 Model retraining and deployment failed! Check previous steps' logs."
           fi
-          # You could integrate a notification action here
+          # You could integrate a notification action here if desired
           # uses: some-action/notify@v1
           # with:
-          #   message: "Model retraining ${{ job.status }} for version ${{ steps.increment_version.outputs.new_version }}"
+          #   message: "Model retraining ${{ job.status }}"
